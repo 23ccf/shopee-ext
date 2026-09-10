@@ -1,0 +1,32 @@
+name: CI
+
+# 每次 push / PR 都跑一遍发布前自检，防止坏代码混进来
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 发布前自检（不打包）
+        run: python publish.py --dry-run
+
+      - name: 校验所有 JS 语法
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nodejs
+          for f in *.js; do
+            node --check "$f" && echo "OK: $f"
+          done

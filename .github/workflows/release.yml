@@ -1,0 +1,64 @@
+name: Build & Release
+
+# 触发方式：
+#   1. 推送 tag：git tag v3.1.7 && git push origin v3.1.7
+#   2. 手动：GitHub 仓库 → Actions → Build & Release → Run workflow
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 发布前自检 + 打包
+        run: python publish.py
+
+      - name: 读取版本号
+        id: ver
+        run: |
+          V=$(python -c "import json;print(json.load(open('manifest.json'))['version'])")
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "版本号: $V"
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release/shopee_selector_ext-${{ steps.ver.outputs.version }}.zip
+          body: |
+            ## 安装方法
+
+            1. 下载下面的 `shopee_selector_ext-${{ steps.ver.outputs.version }}.zip`
+            2. 解压到任意文件夹（**解压后不要删除，扩展需要读取原文件**）
+            3. Chrome / Edge 打开 `chrome://extensions/`
+            4. 打开右上角「**开发者模式**」
+            5. 点「**加载已解压的扩展程序**」，选择刚才解压的文件夹
+            6. 完成！点扩展图标 → ⚙ 配置你的 GitHub 仓库和 Token
+
+            > ⚠️ 不要用「拖拽 zip 安装」的方式，Chrome 会拒绝。必须用「加载已解压的扩展程序」。
+
+            ## 更新日志
+
+            详见下方自动生成的内容。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
