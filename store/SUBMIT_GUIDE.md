@@ -146,7 +146,7 @@
 下面 13 项全 ✅ 才能提交，否则大概率被拒：
 
 - [ ] **manifest_version** = 3（V2 已禁止上架）
-- [ ] **version** 格式合规（`3.1.6` 这样）
+- [ ] **version** 格式合规（`3.1.8` 这样）
 - [ ] **icons** 字段指向真实 PNG 文件
 - [ ] 所有 host_permissions 都有用途说明
 - [ ] 数据使用问卷如实勾选
@@ -199,7 +199,7 @@
 
 后续每次修改代码后：
 
-1. 修改 `manifest.json` 的 `version`（必须递增，如 `3.1.6` → `3.1.7`）
+1. 修改 `manifest.json` 的 `version`（必须递增，如 `3.1.7` → `3.1.8`）
 2. 跑 `python pack.py` 重新生成 zip
 3. 跑 `python publish.py` 跑自检
 4. 后台 → 选已有扩展 → 「Package」Tab → 上传新 zip

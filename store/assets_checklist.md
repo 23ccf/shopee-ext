@@ -64,7 +64,7 @@ Chrome Web Store 要求至少 1 张截图，尺寸 **1280×800**（或 640×400�
 ## 4. 提交前自检
 
 - [ ] `manifest.json` 的 `name` / `description` 与商店文案一致
-- [ ] 版本号 `version` 已递增（当前 3.1.6）
+- [ ] 版本号 `version` 已递增（当前 3.1.8）
 - [ ] 已补 `icons` 字段
 - [ ] 隐私政策已就绪（`store/privacy_policy.md`，提交时粘贴到商店后台）
 - [ ] 截图与宣传图已上传

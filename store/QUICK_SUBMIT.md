@@ -8,7 +8,7 @@
 
 | 材料 | 文件 |
 |---|---|
-| 扩展包 | `release/shopee_selector_ext-3.1.6.zip` |
+| 扩展包 | `release/shopee_selector_ext-<版本>.zip`（当前 **3.1.8**，用 `python publish.py` 生成） |
 | 图标 128 | `icons/icon128.png` |
 | 截图 ×4 | `store/screenshots/*.png`（1280×800） |
 | 宣传图 ×2 | `store/promo/marquee_1400x560.png`（1400×560）、`promo_tile_440x280.png`（440×280） |
@@ -29,7 +29,7 @@
 ## 第 2 步：上传扩展包
 
 1. 后台 → **「新增项目」**（New Item）
-2. 上传 `release/shopee_selector_ext-3.1.6.zip`
+2. 上传 `release/shopee_selector_ext-<版本>.zip`（当前 3.1.8）
 3. 等待自动解析 manifest
 
 ---
@@ -106,7 +106,7 @@
 
 ```
 [ ] manifest_version = 3
-[ ] version 格式 x.y.z（3.1.6 ✅）
+[ ] version 格式 x.y.z、且比上架版本递增（当前 3.1.8 ✅）
 [ ] icons 字段指向真实 PNG
 [ ] 每条 host_permission 都有用途说明
 [ ] 数据使用问卷如实勾选
