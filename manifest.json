@@ -1,0 +1,77 @@
+{
+  "manifest_version": 3,
+  "name": "虾皮台湾选品录制器 (含桥接 v3.1)",
+  "version": "3.1.6",
+  "description": "在跨境卫士等 Chromium 浏览器中，开启即自动录制虾皮买家端浏览到的商品，并同步到网站。",
+  "permissions": ["storage", "alarms", "activeTab", "tabs", "scripting", "declarativeNetRequest"],
+  "host_permissions": [
+    "https://shopee.tw/*",
+    "https://*.shopee.tw/*",
+    "https://api.github.com/*",
+    "https://gitee.com/*",
+    "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*",
+    "https://*.susercontent.com/*",
+    "http://127.0.0.1:3000/*",
+    "http://localhost/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "虾皮选品录制器",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "externally_connectable": {
+    "matches": [
+      "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*"
+    ]
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "shopee-image-referer",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://shopee.tw/*", "https://*.shopee.tw/*"],
+      "js": ["sales_schema.js", "inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://shopee.tw/*", "https://*.shopee.tw/*"],
+      "js": ["sales_schema.js", "content.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*"
+      ],
+      "js": ["bridge_main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

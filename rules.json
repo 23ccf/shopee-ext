@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1001,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Referer", "operation": "set", "value": "https://shopee.tw/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "*://*.susercontent.com/*",
+      "resourceTypes": ["image"]
+    }
+  }
+]

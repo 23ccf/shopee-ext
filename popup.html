@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body { width: 320px; margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif; color: #222; }
+    .wrap { padding: 16px; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    .sub { font-size: 12px; color: #888; margin-bottom: 14px; }
+    .switch-row { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-radius: 10px; background: #f5f6f8; margin-bottom: 12px; }
+    .switch-row .label { font-size: 14px; font-weight: 600; }
+    .switch { position: relative; width: 52px; height: 28px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 28px; transition: .2s; }
+    .slider:before { content: ""; position: absolute; height: 22px; width: 22px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+    input:checked + .slider { background: #e74c3c; }
+    input:checked + .slider:before { transform: translateX(24px); }
+    .stat { font-size: 12px; color: #555; line-height: 1.7; margin-bottom: 12px; }
+    .stat b { color: #2c3e50; }
+    .btns { display: flex; gap: 8px; }
+    button.act { flex: 1; padding: 9px; border: 0; border-radius: 8px; font-size: 13px; cursor: pointer; }
+    button.sync { background: #2d7ff9; color: #fff; }
+    button.sync:disabled { background: #aac4f5; cursor: default; }
+    button.set { background: #fff; border: 1px solid #ddd; color: #333; }
+    button.clear { background: #fff; border: 1px solid #e9b3b3; color: #c0392b; }
+    .msg { font-size: 12px; margin-top: 10px; min-height: 16px; }
+    .ok { color: #27ae60; }
+    .err { color: #e74c3c; }
+    a { color: #2d7ff9; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🛒 虾皮选品录制器</h1>
+    <div class="sub">开启后自动录制虾皮浏览到的商品并同步到网站</div>
+
+    <div class="switch-row">
+      <span class="label">录制开关</span>
+      <label class="switch">
+        <input type="checkbox" id="recToggle">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="switch-row">
+      <span class="label">🌐 浏览即录<br><span style="font-weight:400;font-size:11px;color:#888">不点进商品也能自动抓月/周销量</span></span>
+      <label class="switch">
+        <input type="checkbox" id="browseToggle">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="stat">
+      状态：<b id="stateText">—</b><br>
+      待同步商品：<b id="pendingCount">0</b> 件<br>
+      上次同步(GitHub)：<b id="lastSync">—</b><br>
+      Gitee 镜像：<b id="lastGitee">未启用</b>
+    </div>
+
+    <div class="btns">
+      <button class="act sync" id="syncBtn">⚡ 立即同步</button>
+      <button class="act set" id="setBtn">⚙ 设置</button>
+    </div>
+    <div class="btns" style="margin-top:8px;">
+      <button class="act clear" id="clearBtn">🗑 清空待同步</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

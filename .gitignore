@@ -1,0 +1,42 @@
+# --- 备份与临时 ---
+*.bak
+*.bak-*
+*.tmp
+*.swp
+*.swo
+*~
+
+# --- 打包产物（由 pack.py / publish.py 重新生成）---
+shopee_selector_ext.zip
+shopee_selector_ext.zip.bak*
+__restore_zip/
+
+# --- Chrome 扩展打包时会携带但不需要版本控制的 ---
+__pycache__/
+*.pyc
+
+# --- 测试产物 ---
+/test/
+__test_output_*.json
+__gh_*.json
+__catalog_*.json
+__recording_*.json
+
+# --- 用户私有配置（绝对不要提交）---
+*.token
+secrets/
+.env
+
+# --- IDE ---
+.vscode/
+.idea/
+*.iml
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- 生成产物（store/ 目录下的脚本可重新生成）---
+/store/_*
+/store/preview_*.html
