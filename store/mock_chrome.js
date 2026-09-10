@@ -29,7 +29,7 @@ window.chrome = {
           if (k === 'browseCapture') o[k] = true;
           else if (k === 'cfg') o[k] = { token: '', owner: '23ccf', repo: 'shopee-sync', branch: 'main', catalogPath: 'catalog.json', syncPath: 'sync.json' };
           else if (k === 'giteeCfg') o[k] = { enabled: false, owner: '', repo: 'shopee-sync', branch: 'master', token: '', catalogPath: 'catalog.json', syncPath: 'sync.json' };
-          else if (k === 'backend') o[k] = { enabled: false, url: 'http://127.0.0.1:3000', username: '', password: '' };
+          else if (k === 'backend') o[k] = { enabled: false, url: '', username: '', password: '' };
         }
         return Promise.resolve(o);
       },

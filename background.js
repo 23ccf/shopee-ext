@@ -675,7 +675,8 @@ function doSyncShared() {
 async function doSync() {
   const s = await getState();
   const cfg = s.cfg;
-  // ★ 2026-09-09：新增「自建后端」模式。开启后完全绕过 GitHub，直接用账号密码登录后端推送商品。
+  // 可选「自建后端」模式：仅在用户**显式启用且填了地址**时才走后端。
+  // 默认（未启用 / 地址为空）一律走 GitHub —— 这是跨境卫士环境的唯一可用路径。
   const backend = s.backend || {};
   if (backend.enabled && backend.url) {
     return doSyncBackend(backend, s);
@@ -882,7 +883,13 @@ async function doSyncBackend(backend, s) {
   const base = String(backend.url).replace(/\/$/, '');
   let token = backend.token;
   if (!token) {
-    const loginRes = await backendApi(base, '/api/auth/login', { username: backend.username, password: backend.password });
+    let loginRes;
+    try {
+      loginRes = await backendApi(base, '/api/auth/login', { username: backend.username, password: backend.password }, null, 8000);
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+    if (!loginRes) return { ok: false, error: '后端登录失败：无响应' };
     if (!loginRes.ok) return { ok: false, error: '后端登录失败：' + (loginRes.error || loginRes.message || '未知') };
     token = loginRes.token;
     backend.token = token;
@@ -944,7 +951,7 @@ async function doSyncBackend(backend, s) {
   }
 }
 
-async function backendApi(base, path, body, token) {
+async function backendApi(base, path, body, token, timeoutMs) {
   const url = base + path;
   const init = {
     method: body ? 'POST' : 'GET',
@@ -953,7 +960,25 @@ async function backendApi(base, path, body, token) {
   // 用自定义 header，避免反向代理改写 Authorization
   if (token) init.headers['x-shopee-token'] = token;
   if (body) init.body = JSON.stringify(body);
-  const r = await fetch(url, init);
+
+  // ★ 超时兜底（必选）：自建后端域名在跨境卫士等代理环境下，请求可能既不成功也不失败、
+  //   永久挂起，没有超时会把整个同步流程（乃至页面）拖死。8 秒无响应即放弃并报错。
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || 8000);
+  init.signal = ctrl.signal;
+
+  let r;
+  try {
+    r = await fetch(url, init);
+  } catch (e) {
+    clearTimeout(timer);
+    const aborted = (e && (e.name === 'AbortError' || /abort/i.test(String(e.message))));
+    throw new Error(aborted
+      ? ('后端无响应（超时 ' + Math.round((timeoutMs || 8000) / 1000) + 's）：' + base +
+         ' —— 若使用跨境卫士等代理浏览器，请关闭「自建后端」改用 GitHub 模式')
+      : ('后端无法连接：' + ((e && e.message) || e)));
+  }
+  clearTimeout(timer);
   if (!r.ok) {
     const text = await r.text().catch(() => '');
     let json; try { json = JSON.parse(text); } catch (e) {}

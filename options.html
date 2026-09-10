@@ -20,15 +20,16 @@
   <p class="hint">录制器会把商品同步到你自己的后端（网站数据源）。如果你仍想用 GitHub，请关闭「使用自建后端」。</p>
 
   <div class="field">
-    <label><input type="checkbox" id="useBackend" style="width:auto;margin-right:6px;">使用自建后端（账号登录模式）</label>
-    <div class="hint">开启后，扩展通过账号密码登录后端，直接把商品写入后端数据库，无需 GitHub Token。这是开源给他人使用的推荐方式。</div>
+    <label><input type="checkbox" id="useBackend" style="width:auto;margin-right:6px;">使用自建后端（账号登录模式，可选）</label>
+    <div class="hint"><b>默认不勾选</b> —— 不勾选时走 GitHub 模式，这是跨境卫士环境的唯一可用路径。只有你自己部署了后端、且当前浏览器能直连该地址时才勾选。</div>
   </div>
 
   <div id="backendFields" style="display:none;">
     <div class="field">
       <label>后端地址</label>
-      <input type="text" id="backendUrl" placeholder="http://127.0.0.1:3000">
-      <div class="hint">你部署的后端地址，例如 CloudStudio 给你的 URL。</div>
+      <input type="text" id="backendUrl" placeholder="https://your-backend.example.com">
+      <div class="hint">你自己部署的后端地址。留空则保持 GitHub 模式。<br>
+      <b>⚠️ 跨境卫士等代理浏览器请勿启用</b>：代理只放行虾皮域名，访问自建后端会请求挂起导致卡死。请求已内置 8 秒超时兜底。</div>
     </div>
     <div class="field">
       <label>用户名</label>

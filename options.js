@@ -40,7 +40,7 @@ async function load() {
   const cfg = s.cfg || {};
   const backend = s.backend || {};
   els.useBackend.checked = !!backend.enabled;
-  els.backendUrl.value = backend.url || 'http://127.0.0.1:3000';
+  els.backendUrl.value = backend.url || '';   // 不再预填任何地址：未填 = 保持 GitHub 模式
   els.backendUsername.value = backend.username || '';
   els.backendPassword.value = backend.password || '';
   // GitHub
@@ -68,24 +68,38 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   const useB = !!els.useBackend.checked;
   const backend = {
     enabled: useB,
-    url: (els.backendUrl.value.trim() || 'http://127.0.0.1:3000').replace(/\/$/, ''),
+    url: els.backendUrl.value.trim().replace(/\/$/, ''),   // 留空 = 不启用后端（保持 GitHub 模式）
     username: els.backendUsername.value.trim(),
     password: els.backendPassword.value,
   };
+  if (useB && !backend.url) {
+    setMsg('使用后端模式需填写后端地址（如 https://your-backend.example.com）', 'err'); return;
+  }
   if (useB && (!backend.username || !backend.password)) {
     setMsg('使用后端模式需填写用户名和密码', 'err'); return;
   }
   if (useB) {
-    // 保存前先登录后端，验证账号密码
+    // 保存前先登录后端，验证账号密码。
+    // ★ 必须带超时：代理环境下请求可能永久挂起，会导致设置页「一直转圈」卡死。
     try {
-      const r = await fetch(backend.url + '/api/auth/login', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: backend.username, password: backend.password }),
-      });
-      const d = await r.json();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      let r, d;
+      try {
+        r = await fetch(backend.url + '/api/auth/login', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username: backend.username, password: backend.password }),
+          signal: ctrl.signal,
+        });
+        d = await r.json();
+      } finally { clearTimeout(timer); }
       if (!d.ok) { setMsg('后端登录失败：' + (d.error || '未知'), 'err'); return; }
       backend.token = d.token;
-    } catch (e) { setMsg('后端登录失败：' + e.message, 'err'); return; }
+    } catch (e) {
+      const aborted = e && (e.name === 'AbortError' || /abort/i.test(String(e.message)));
+      setMsg(aborted ? '后端无响应（8 秒超时）：请检查地址，或改用 GitHub 模式' : ('后端登录失败：' + e.message), 'err');
+      return;
+    }
   }
 
   const cfg = {
