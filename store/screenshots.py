@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 from PIL import Image
 
 EXT = "C:/Users/1/shopee_ext"
-SITE = "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net"
+SITE = "https://23ccf.github.io/shopee-site"
 OUT = os.path.join(EXT, "store", "screenshots")
 os.makedirs(OUT, exist_ok=True)
 

@@ -93,8 +93,25 @@ async function persistSiteDeletedViaExtension(payload) {
 }
 // ---- 主动桥接：当用户打开选品网站时，扩展自动向页面主世界注入扩展 id ----
 //   用于兜底 content_scripts 因浏览器策略/权限/时序未注入的情况。
-const SITE_HOST = 'b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net';
-const SITE_PATTERN = 'https://' + SITE_HOST + '/*';
+//
+// 站点地址可能随部署方式变化，桥接必须覆盖全部已知位置：
+//   · GitHub Pages —— 当前线上主用；用 *.github.io 通配，这样任何人 fork 后
+//     部署到自己的 https://<用户名>.github.io/<仓库>/ 也能被识别，无需改代码
+//   · 旧 Cloud Studio 空间 —— 保留兼容，若重新在该空间发布仍可用
+const SITE_HOSTS = [
+  'b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net'
+];
+// 注：*.github.io 走通配判断，不列进 SITE_HOSTS（否则只能匹配一级子域）
+const SITE_PATTERN = 'https://' + SITE_HOSTS[0] + '/*';
+const SITE_PATTERNS = ['https://*.github.io/*', SITE_PATTERN];
+function isSiteUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') return false;
+    if (/(^|\.)github\.io$/i.test(u.hostname)) return true;
+    return SITE_HOSTS.indexOf(u.hostname) >= 0;
+  } catch (e) { return false; }
+}
 function injectBridgeToTab(tabId) {
   try {
     const code = `
@@ -122,13 +139,13 @@ function injectBridgeToTab(tabId) {
   } catch (e) {}
 }
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab && tab.url && tab.url.startsWith('https://' + SITE_HOST + '/')) {
+  if (changeInfo.status === 'complete' && tab && tab.url && isSiteUrl(tab.url)) {
     injectBridgeToTab(tabId);
   }
 });
 // 对当前已打开的网站标签也尝试注入一次（扩展刚加载/更新时）
 try {
-  chrome.tabs.query({ url: SITE_PATTERN }).then((tabs) => {
+  chrome.tabs.query({ url: SITE_PATTERNS }).then((tabs) => {
     for (const t of tabs) { if (t.id) injectBridgeToTab(t.id); }
   }).catch(() => {});
 } catch (e) {}

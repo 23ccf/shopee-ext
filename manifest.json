@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "虾皮台湾选品录制器 (含桥接 v3.1)",
-  "version": "3.1.7",
+  "version": "3.1.8",
   "description": "在跨境卫士等 Chromium 浏览器中，开启即自动录制虾皮买家端浏览到的商品，并同步到网站。",
   "permissions": ["storage", "alarms", "activeTab", "tabs", "scripting", "declarativeNetRequest"],
   "host_permissions": [
@@ -9,6 +9,7 @@
     "https://*.shopee.tw/*",
     "https://api.github.com/*",
     "https://gitee.com/*",
+    "https://*.github.io/*",
     "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*",
     "https://*.susercontent.com/*",
     "http://127.0.0.1:3000/*",
@@ -34,6 +35,7 @@
   },
   "externally_connectable": {
     "matches": [
+      "https://*.github.io/*",
       "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*"
     ]
   },
@@ -60,6 +62,7 @@
     },
     {
       "matches": [
+        "https://*.github.io/*",
         "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*"
       ],
       "js": ["bridge.js"],
@@ -67,6 +70,7 @@
     },
     {
       "matches": [
+        "https://*.github.io/*",
         "https://b966eeee72f14075ac04f41b7f0c79dd.bj2.agentos-app.net/*"
       ],
       "js": ["bridge_main.js"],
