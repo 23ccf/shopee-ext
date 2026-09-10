@@ -620,7 +620,7 @@
         endpoint: endpoint,
         items: [{
           itemid: r.itemid, shopid: r.shopid,
-          name: r.name || '', price: r.price, img: r.img || '',
+          name: r.name || '', price: r.price, price_max: r.priceMax, img: r.img || '',
           // ★ tri-state：月销允许 null（未知），绝不补 0（见复盘 §0 错误5）
           month_sold: r.month, sold_total: r.total,
           shopCapture: true, shopId: r.shopid, shopName: cardShopName,
@@ -675,6 +675,8 @@
             endpoint: '/api/v4/item/get',
             items: [{
               itemid: it.itemid, shopid: it.shopid, name: it.name, price: it.price, img: it.img,
+              // 价格区间上限：item/get 是权威源（能拿到 price_max），拿不到则沿用卡片值
+              price_max: (r2.priceMax != null ? r2.priceMax : it.price_max),
               month_sold: r2.month, sold_total: (r2.total != null ? r2.total : it.sold_total),
               shopCapture: true, shopId: it.shopId, shopName: it.shopName,
               _icscMonth: r2.month, _overlayMonth: r2.month, _overlay: true

@@ -147,6 +147,9 @@
   function icsc(which) { return { type: 'icsc', which: which }; }
   function dom(re) { return { type: 'dom', re: re }; }
   function price(keys, unit) { return { type: 'price', keys: keys, unit: unit }; }
+  // 价格区间上限（2026-09-10 新增）：虾皮对「多规格」商品用 price_max 表示最高价。
+  // 换算单位与 price 共用同一 unit，避免「下限除过、上限没除」的错位。
+  var PRICE_MAX_KEYS = ['price_max', 'item_data.item_card_display_price.price_max'];
 
   function coerceIntLocal(v) {
     if (v == null) return null;
@@ -307,12 +310,18 @@
     if (week == null && month != null && month > 0) week = Math.round(month / 4.345);
     var priceVal = (ep.price && ep.price.type === 'price')
       ? convertPrice(firstDeep(it, ep.price.keys), ep.price.unit) : undefined;
+    // ★ 价格区间上限：仅当商品确有 price_max 且严格高于现价时才记录（否则视为单一价格）。
+    var priceMaxVal;
+    if (ep.price && ep.price.type === 'price') {
+      var _m = convertPrice(firstDeep(it, ep.price.maxKeys || PRICE_MAX_KEYS), ep.price.unit);
+      if (_m != null && priceVal != null && _m > priceVal) priceMaxVal = _m;
+    }
     var name = firstDeep(it, ep.name || []);
     var img = firstDeep(it, ep.img || []);
     return {
       itemid: String(id), shopid: String(sid),
       month: month, total: total, week: week,
-      price: priceVal, name: name, img: img
+      price: priceVal, priceMax: priceMaxVal, name: name, img: img
     };
   }
   function matchEndpoint(endpoint) {
@@ -335,6 +344,7 @@
 
   var api = {
     SR_SCHEMA: SR_SCHEMA,
+    PRICE_MAX_KEYS: PRICE_MAX_KEYS,
     deepGet: deepGet,
     findByKeyDeep: findByKeyDeep,
     locateIcs: locateIcs,

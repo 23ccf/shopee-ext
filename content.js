@@ -1231,6 +1231,10 @@
             keep_shop: true
           };
           if (it.price != null) sprod.price = Number(it.price);
+          // ★ 价格区间上限（2026-09-10）：多规格商品才有，缺失就不写，网站按单一价格显示
+          if (it.price_max != null && Number(it.price_max) > Number(it.price || 0)) {
+            sprod.price_max = Number(it.price_max);
+          }
           if (sName) sprod.name = String(sName);
           if (sImg) sprod.img = sImg;
           if (sLoc && typeof sLoc === 'string') sprod.loc = sLoc;
@@ -1255,6 +1259,8 @@
           week_sold: (r.week != null && r.week > 0) ? r.week : ((r.month && r.month > 0) ? Math.round(r.month / 4.345) : 0),
           price: (r.price == null) ? undefined : r.price
         };
+        // ★ 价格区间上限（2026-09-10）：多规格商品才有 price_max；缺失/不高于现价则不写
+        if (r.priceMax != null && r.price != null && r.priceMax > r.price) rec.price_max = r.priceMax;
         // ★ 2026-08-20：从嵌套 item_basic / item 子对象提取名称/图片/店铺/产地/评分/点赞/库存
         var name = pickValue(it, ['name', 'title']);
         if (name) rec.name = String(name);
@@ -1287,6 +1293,7 @@
           if (!rec.week_sold && _prev.week_sold > 0) rec.week_sold = _prev.week_sold;
           if (!rec.total_sold && _prev.total_sold > 0) rec.total_sold = _prev.total_sold;
           if (!rec.price && _prev.price) rec.price = _prev.price;
+          if (rec.price_max == null && _prev.price_max) rec.price_max = _prev.price_max;
           if (!rec.name && _prev.name) rec.name = _prev.name;
           if (!rec.img && _prev.img) rec.img = _prev.img;
           if (!rec.shop && _prev.shop) rec.shop = _prev.shop;

@@ -357,6 +357,10 @@ function slimItem(it) {
   // 先过 sanePrice 兜底修正残留的单位错误（旧录制的大 10 倍价格），正常价格原样通过。
   const pr = sanePrice(Number(it.price));
   if (isFinite(pr) && pr >= 30 && pr < 1000000) o.price = pr;
+  // ★ 价格区间上限（2026-09-10）：多规格商品的最高价。同样过 sanePrice，
+  //   且必须严格高于现价才算「区间」——否则就是脏数据，宁可不写。
+  const pmx = sanePrice(Number(it.price_max));
+  if (isFinite(pmx) && pmx > pr && pmx < 1000000) o.price_max = pmx;
   ['name', 'img', 'rating', 'reviews', 'liked', 'stock', 'shop', 'loc', 'brand', 'discount'].forEach((k) => {
     if (it[k]) o[k] = it[k];   // 0 / '' / null 全部省略
   });
@@ -387,6 +391,13 @@ function mergeFields(oldItem, newItem) {
       const nv = sanePrice(Number(v));
       // 价格是敏感字段：必须 >=30 才算「真售价」
       if (!isNaN(nv) && nv >= 30 && nv < 1000000) out[k] = nv;
+      continue;
+    }
+    if (k === 'price_max') {
+      // 价格区间上限：必须严格高于现价才保留（旧值可能是别的字段误入）
+      const nv2 = sanePrice(Number(v));
+      const base = sanePrice(Number(out.price));
+      if (!isNaN(nv2) && nv2 < 1000000 && (!isNaN(base) ? nv2 > base : nv2 >= 30)) out[k] = nv2;
       continue;
     }
     if (['month_sold', 'week_sold', 'total_sold', 'sold', 'sold_total', 'rating', 'liked', 'reviews', 'stock'].includes(k)) {
