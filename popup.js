@@ -10,6 +10,7 @@ const lastGitee = document.getElementById('lastGitee');
 const syncBtn = document.getElementById('syncBtn');
 const setBtn = document.getElementById('setBtn');
 const clearBtn = document.getElementById('clearBtn');
+const pageBtn = document.getElementById('pageBtn');
 const msg = document.getElementById('msg');
 
 function setMsg(text, cls) {
@@ -104,6 +105,31 @@ clearBtn.addEventListener('click', async () => {
   if (!confirm(`确认清空 ${n} 件待同步数据？\n（清空后需重新浏览/录制商品，已推送到 GitHub 的数据不受影响）`)) return;
   await chrome.storage.local.set({ pending: {} });
   setMsg(`✓ 已清空 ${n} 件待同步数据`, 'ok');
+  await refresh();
+});
+
+// ★ 2026-09-11「录完这一页」：自动滚到底，把当前页/当前店的商品全部加载并录制。
+//   只滚动、不发额外请求、不点页面按钮 —— 风控面与手动滚一模一样。
+pageBtn.addEventListener('click', async () => {
+  pageBtn.disabled = true;
+  setMsg('正在滚动加载…期间请不要手动操作这个页面');
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || tab.id == null) { setMsg('✗ 拿不到当前标签页', 'err'); pageBtn.disabled = false; return; }
+    const r = await chrome.tabs.sendMessage(tab.id, { type: 'recordPage' });
+    if (r && r.ok) {
+      if (r.added > 0) {
+        setMsg(`✓ 已录完这一页：新增 ${r.added} 件，其中月销≥30 的 ${r.month30} 件（网站只显示 ≥30 的）· 用时 ${r.seconds}s`, 'ok');
+      } else {
+        setMsg(`✓ 这一页已经录过了，没有新商品（当前会话共 ${r.total} 件）`, 'ok');
+      }
+    } else {
+      setMsg('✗ ' + ((r && r.error) ? r.error : '没拿到结果'), 'err');
+    }
+  } catch (e) {
+    setMsg('✗ 无法与页面通信：请刷新虾皮页面后重试（扩展刚更新过的话必须刷新）', 'err');
+  }
+  pageBtn.disabled = false;
   await refresh();
 });
 

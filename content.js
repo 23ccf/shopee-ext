@@ -19,6 +19,7 @@
   var browseCapture = true;  // 开关：true=浏览列表页即自动捕获所有商品的月/周/总销量
   var browseCount = 0;       // 本次已扫到的列表商品件数（含未发送）
   var browseMonthCount = 0;  // 其中含真实月销量的件数
+  var sentMonth = {};        // ★ 2026-09-11：key -> 该商品已发送的月销（供「录完这一页」回报月销≥30 件数）
   var apiInterceptLog = [];  // 最近几条拦截日志（用于诊断）
   var reqLog = [];           // inject.js 定期推送的页面请求 URL 列表（跨 world 读取失败，改用 postMessage）
   var capturedUrlLog = [];   // 捕获到商品数据的接口请求 URL（诊断用）
@@ -1413,6 +1414,7 @@
   function sendProduct(prod, tag, isUpdate) {
     if (!prod || !prod.itemid || !prod.shopid) return;
     var key = prod.shopid + '-' + prod.itemid;
+    sentMonth[key] = Number(prod.month_sold) || 0;
     if (!isUpdate) {
       if (sentKeys[key]) return;
       // 若有页面接口已捕获到真实销量，先合并进本次发送，避免先发的 0 值覆盖后续真实值
@@ -1864,11 +1866,71 @@
     warn('恢复卖家中心捕获失败:', e.message);
   }
 
-  // 监听后台推送的 pendingCount
-  chrome.runtime.onMessage.addListener(function (msg) {
-    if (msg && msg.type === 'pendingCount') {
+  // ---- ★ 2026-09-11「录完这一页」：自动滚到底，把这一页 / 这家店的商品全部加载出来 ----
+  // 为什么需要：现在必须手动滚，而列表是分批懒加载的 —— 快滚时中间会漏掉整批商品，
+  //   手动滚一页要 1~2 分钟，还容易漏。这里只做「等价于人手动滚动」这一个动作。
+  // 三条自我约束（对齐项目红线「绝不让跨境卫士登录出问题」）：
+  //   ① 只滚动，不点任何按钮、不发任何额外请求 → 不新增风控面；
+  //   ② 步长固定、间隔 1.2 秒；连续 3 次页面高度不增长即判定到底；
+  //   ③ 最多 120 步 / 90 秒；录制开关一关立即停；全程不调 enrich（不拉详情页 HTML，避免 403）。
+  var pageRecRunning = false;
+  function recordWholePage() {
+    return new Promise(function (resolve) {
+      if (pageRecRunning) { resolve({ ok: false, error: '正在录制中，请稍候' }); return; }
+      if (!recordingOn) { resolve({ ok: false, error: '录制开关没开（面板上拨到红色再试）' }); return; }
+      var tag = pageTag();
+      if (tag === '浏览') {
+        // 搜索 / 每日发现 / 首页自 2026-08-25 起就不录制（低质噪音多）。如实说明，别让用户以为功能坏了。
+        resolve({ ok: false, error: '这个页面不在录制范围（搜索页 / 每日发现 / 首页）——请在「店铺页」使用，或点开商品进详情页' });
+        return;
+      }
+      pageRecRunning = true;
+      var beforeSet = {};
+      var k0 = Object.keys(sentKeys);
+      for (var i0 = 0; i0 < k0.length; i0++) beforeSet[k0[i0]] = 1;
+      var steps = 0, lastH = -1, still = 0, t0 = Date.now();
+      function finish() {
+        pageRecRunning = false;
+        try { scrapeCards(); } catch (e) {}
+        setTimeout(function () {
+          var all = Object.keys(sentKeys), added = 0, m30 = 0;
+          for (var i = 0; i < all.length; i++) {
+            if (beforeSet[all[i]]) continue;
+            added++;
+            if ((sentMonth[all[i]] || 0) >= 30) m30++;
+          }
+          try { updateFloat(); } catch (e) {}
+          log('录完这一页完成：新增=' + added + ' 月销≥30=' + m30 + ' 步数=' + steps);
+          resolve({ ok: true, tag: tag, added: added, month30: m30,
+                    total: all.length, seconds: Math.round((Date.now() - t0) / 1000) });
+        }, 1200);
+      }
+      function tick() {
+        if (!recordingOn) { finish(); return; }
+        var h = document.documentElement.scrollHeight || 0;
+        window.scrollTo(0, h);
+        steps++;
+        if (h <= lastH) still++; else still = 0;
+        lastH = h;
+        if (still >= 3 || steps >= 120 || (Date.now() - t0) > 90000) { finish(); return; }
+        setTimeout(tick, 1200);
+      }
+      tick();
+    });
+  }
+
+  // 监听后台推送的 pendingCount，以及面板发来的「录完这一页」指令
+  chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+    if (!msg) return;
+    if (msg.type === 'pendingCount') {
       pendingCount = msg.n || 0;
       updateFloat();
+      return;
+    }
+    if (msg.type === 'recordPage') {
+      recordWholePage().then(function (r) { sendResponse(r); })
+        .catch(function (e) { sendResponse({ ok: false, error: (e && e.message) || '未知异常' }); });
+      return true; // 异步回执，保持消息通道
     }
   });
 

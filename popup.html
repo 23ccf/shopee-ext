@@ -24,6 +24,8 @@
     button.sync:disabled { background: #aac4f5; cursor: default; }
     button.set { background: #fff; border: 1px solid #ddd; color: #333; }
     button.clear { background: #fff; border: 1px solid #e9b3b3; color: #c0392b; }
+    button.page { background: #fff; border: 1px solid #b8d4f0; color: #1c6fd0; }
+    button.page:disabled { color: #9db8d6; border-color: #dbe7f4; cursor: default; }
     .msg { font-size: 12px; margin-top: 10px; min-height: 16px; }
     .ok { color: #27ae60; }
     .err { color: #e74c3c; }
@@ -61,6 +63,9 @@
     <div class="btns">
       <button class="act sync" id="syncBtn">⚡ 立即同步</button>
       <button class="act set" id="setBtn">⚙ 设置</button>
+    </div>
+    <div class="btns" style="margin-top:8px;">
+      <button class="act page" id="pageBtn">📄 录完这一页</button>
     </div>
     <div class="btns" style="margin-top:8px;">
       <button class="act clear" id="clearBtn">🗑 清空待同步</button>
