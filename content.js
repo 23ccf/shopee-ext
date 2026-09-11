@@ -1918,9 +1918,53 @@
           try { updateFloat(); } catch (e) {}
           var added = tally ? tally.n : 0, m30 = tally ? tally.m30 : 0;
           log('录完这一页完成：新增=' + added + ' 月销≥30=' + m30 + ' 步数=' + steps);
+          // 在页面上也给一个明确的结果回执：用户不用回头去看弹窗，
+          // 也不会因为「等了半天什么都没看到」而怀疑功能坏了。
+          try {
+            var el = floatEl && floatEl.querySelector('#sr-msg');
+            if (el) {
+              el.textContent = '✅ 录完这一页：新增 ' + added + ' 件（月销≥30 的 ' + m30 + ' 件）· 用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒';
+              el.style.color = '#27ae60';
+              setTimeout(function () {
+                if (el.textContent && el.textContent.indexOf('录完这一页') >= 0) { el.textContent = ''; el.style.color = ''; }
+              }, 8000);
+            }
+          } catch (e) {}
           resolve({ ok: true, tag: tag, added: added, month30: m30,
                     total: Object.keys(sentKeyAll).length, seconds: Math.round((Date.now() - t0) / 1000) });
         }, 1200);
+      }
+      // ★ 2026-09-11 提速：不再每步死等 1.2 秒。
+      //   旧写法固定 setTimeout(tick, 1200)：实测虾皮懒加载通常 200~600ms 就回来了，
+      //   一页 20 批就白等 20 秒以上（用户主观感受「卡在那儿不动」）。
+      //   现在改成「盯着页面高度」：每 150ms 看一眼新内容有没有进来，一进来立刻走下一步；
+      //   没进来则最多等满 1200ms —— 所以**慢的时候与旧版耗时完全相同，快的时候成倍提前**。
+      //   三重上限（连续 3 次高度不增长 / 120 步 / 90 秒）与「录制开关一关立即停」一个都没动。
+      //   注意：参照高度取「本步开始滚动前的高度」，与下面 still 的判据同源 ——
+      //   这样「waitGrow 认为涨了」⟺「下一步 tick 会把 still 归零」，两者不会互相矛盾。
+      var POLL_MS = 150, STEP_MAX_MS = 1200;
+      function waitGrow(refH, cb) {
+        var waited = 0;
+        function probe() {
+          if (!recordingOn) { cb(); return; }
+          waited += POLL_MS;
+          var h = document.documentElement.scrollHeight || 0;
+          if (h > refH || waited >= STEP_MAX_MS) { cb(); return; }
+          setTimeout(probe, POLL_MS);
+        }
+        setTimeout(probe, POLL_MS);
+      }
+      // 进度反馈：录制最长可跑 90 秒，全程不给任何指示时用户只会以为「卡死了」，
+      // 于是手动去点、去关开关 —— 反而打断录制。这里每步刷一行进度，
+      // 让人一眼看出「在动」以及还要多久。
+      function showProgress(steps, t0) {
+        try {
+          var el = floatEl && floatEl.querySelector('#sr-msg');
+          if (!el || !pageRecTally) return;
+          var sec = Math.round((Date.now() - t0) / 1000);
+          el.textContent = '录完这一页：第 ' + steps + ' 步 · 本轮新增 ' + pageRecTally.n + ' 件 · 已用 ' + sec + ' 秒';
+          el.style.color = '#e67e22';
+        } catch (e) {}
       }
       function tick() {
         if (!recordingOn) { finish(); return; }
@@ -1929,8 +1973,9 @@
         steps++;
         if (h <= lastH) still++; else still = 0;
         lastH = h;
+        showProgress(steps, t0);
         if (still >= 3 || steps >= 120 || (Date.now() - t0) > 90000) { finish(); return; }
-        setTimeout(tick, 1200);
+        waitGrow(h, tick);
       }
       tick();
     });
