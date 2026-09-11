@@ -20,6 +20,11 @@
   var browseCount = 0;       // 本次已扫到的列表商品件数（含未发送）
   var browseMonthCount = 0;  // 其中含真实月销量的件数
   var sentMonth = {};        // ★ 2026-09-11：key -> 该商品已发送的月销（供「录完这一页」回报月销≥30 件数）
+  var sentKeyAll = {};       // 本次会话已发送过的全部 key（不受 isUpdate 影响，用于回报总件数）
+  // ★ 2026-09-11：「录完这一页」进行中的计数器。
+  //   不能用 sentKeys 差集：店铺页走的是 sendProduct(...,true)（isUpdate），
+  //   那条路径根本不写 sentKeys，导致「新增 N 件」在店铺页恒为 0。
+  var pageRecTally = null;   // { keys:{key:maxMonth}, n:0, m30:0 }
   var apiInterceptLog = [];  // 最近几条拦截日志（用于诊断）
   var reqLog = [];           // inject.js 定期推送的页面请求 URL 列表（跨 world 读取失败，改用 postMessage）
   var capturedUrlLog = [];   // 捕获到商品数据的接口请求 URL（诊断用）
@@ -1415,12 +1420,27 @@
     if (!prod || !prod.itemid || !prod.shopid) return;
     var key = prod.shopid + '-' + prod.itemid;
     sentMonth[key] = Number(prod.month_sold) || 0;
+    sentKeyAll[key] = 1;
     if (!isUpdate) {
       if (sentKeys[key]) return;
       // 若有页面接口已捕获到真实销量，先合并进本次发送，避免先发的 0 值覆盖后续真实值
       prod = applyCapture(prod);
       sentKeys[key] = true;
       sessionCount++;
+    }
+    // ★ 「录完这一页」计数：无条件记账（不受 isUpdate 影响），
+    //   同一件只算一次，并且月销取最大值（后续 API 捕获到真实值时会补上）。
+    if (pageRecTally) {
+      var _m = Number(prod.month_sold) || 0;
+      var _prev = pageRecTally.keys[key];
+      if (_prev === undefined) {
+        pageRecTally.keys[key] = _m;
+        pageRecTally.n++;
+        if (_m >= 30) pageRecTally.m30++;
+      } else if (_m > _prev) {
+        pageRecTally.keys[key] = _m;
+        if (_m >= 30 && _prev < 30) pageRecTally.m30++;
+      }
     }
     updateFloat();
     sendToBackground({ products: [prod], tag: tag, url: location.href });
@@ -1879,30 +1899,27 @@
       if (pageRecRunning) { resolve({ ok: false, error: '正在录制中，请稍候' }); return; }
       if (!recordingOn) { resolve({ ok: false, error: '录制开关没开（面板上拨到红色再试）' }); return; }
       var tag = pageTag();
-      if (tag === '浏览') {
+      // ★ 用白名单而非黑名单：pageTag() 对搜索页返回 '搜索'、每日发现返回 '每日新发现'，
+      //   只盯着 '浏览' 会让这些页面漏过去照样滚，然后报「已经录过了」—— 那是骗人。
+      if (tag !== '店铺' && tag !== '商品详情') {
         // 搜索 / 每日发现 / 首页自 2026-08-25 起就不录制（低质噪音多）。如实说明，别让用户以为功能坏了。
         resolve({ ok: false, error: '这个页面不在录制范围（搜索页 / 每日发现 / 首页）——请在「店铺页」使用，或点开商品进详情页' });
         return;
       }
       pageRecRunning = true;
-      var beforeSet = {};
-      var k0 = Object.keys(sentKeys);
-      for (var i0 = 0; i0 < k0.length; i0++) beforeSet[k0[i0]] = 1;
+      pageRecTally = { keys: {}, n: 0, m30: 0 };
       var steps = 0, lastH = -1, still = 0, t0 = Date.now();
       function finish() {
         pageRecRunning = false;
         try { scrapeCards(); } catch (e) {}
         setTimeout(function () {
-          var all = Object.keys(sentKeys), added = 0, m30 = 0;
-          for (var i = 0; i < all.length; i++) {
-            if (beforeSet[all[i]]) continue;
-            added++;
-            if ((sentMonth[all[i]] || 0) >= 30) m30++;
-          }
+          var tally = pageRecTally;
+          pageRecTally = null;
           try { updateFloat(); } catch (e) {}
+          var added = tally ? tally.n : 0, m30 = tally ? tally.m30 : 0;
           log('录完这一页完成：新增=' + added + ' 月销≥30=' + m30 + ' 步数=' + steps);
           resolve({ ok: true, tag: tag, added: added, month30: m30,
-                    total: all.length, seconds: Math.round((Date.now() - t0) / 1000) });
+                    total: Object.keys(sentKeyAll).length, seconds: Math.round((Date.now() - t0) / 1000) });
         }, 1200);
       }
       function tick() {

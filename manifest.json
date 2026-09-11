@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "虾皮台湾选品录制器 (含桥接 v3.1)",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "在跨境卫士等 Chromium 浏览器中，开启即自动录制虾皮买家端浏览到的商品，并同步到网站。",
   "permissions": ["storage", "alarms", "activeTab", "tabs", "scripting", "declarativeNetRequest"],
   "host_permissions": [
