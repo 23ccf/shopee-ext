@@ -319,6 +319,7 @@
       shop: shop,
       loc: loc,
       official: official,
+      ctime: (r.ctime != null && r.ctime > 0) ? r.ctime : undefined,
     };
   }
 
@@ -789,6 +790,7 @@
           shop: detail.shop,
           loc: detail.loc,
           official: detail.official,
+          listed_at: (detail.ctime != null && detail.ctime > 0) ? detail.ctime : undefined,
           cats: [],
           url: 'https://shopee.tw/product/' + detail.shopid + '/' + detail.itemid,
         };
@@ -1244,6 +1246,9 @@
           if (sName) sprod.name = String(sName);
           if (sImg) sprod.img = sImg;
           if (sLoc && typeof sLoc === 'string') sprod.loc = sLoc;
+          // ★ 2026-09-17：上架时间（ctime，unix 秒）→ listed_at。网站据此显示「上架 N 天」。
+          var _ct = Number(it.ctime);
+          if (isFinite(_ct) && _ct > 0) sprod.listed_at = _ct;
           sendProduct(sprod, source === 'pdp_card' ? 'PDP推荐' : '店铺', true);
           continue;
         }
@@ -1265,6 +1270,8 @@
           week_sold: (r.week != null && r.week > 0) ? r.week : ((r.month && r.month > 0) ? Math.round(r.month / 4.345) : 0),
           price: (r.price == null) ? undefined : r.price
         };
+        // ★ 2026-09-17：上架时间（ctime，unix 秒）
+        if (r.ctime != null && r.ctime > 0) rec.listed_at = r.ctime;
         // ★ 价格区间上限（2026-09-10）：多规格商品才有 price_max；缺失/不高于现价则不写
         if (r.priceMax != null && r.price != null && r.priceMax > r.price) rec.price_max = r.priceMax;
         // ★ 2026-08-20：从嵌套 item_basic / item 子对象提取名称/图片/店铺/产地/评分/点赞/库存
@@ -1356,6 +1363,7 @@
         if (rec.rating) prod.rating = rec.rating;
         if (rec.liked != null) prod.liked = rec.liked;
         if (rec.stock != null) prod.stock = rec.stock;
+        if (rec.listed_at) prod.listed_at = rec.listed_at;
         // ★ 2026-08-20（浏览即录）：列表类接口（搜索/推荐/店铺墙/热销榜）响应里每件商品
         //   已自带月销量(icsc)，【无需点进详情】即可抓取。区分「详情权威」与「列表浏览」：
         //   - 详情类（item/get/pdp/get 等）：点开必录（现有行为）。
@@ -1637,7 +1645,14 @@
     var dot = floatEl.querySelector('.sr-dot');
     if (dot) dot.style.animation = recordingOn ? 'sr-blink 1s infinite' : 'none';
     var ver = floatEl.querySelector('#sr-ver');
-    if (ver) ver.textContent = injectVersion ? ('v' + injectVersion) : 'v?';
+    // ★ 2026-09-17：优先显示 manifest 版本号——旧扩展常驻浏览器时 injectVersion 字符串不变，
+    //   用户无从发现「浏览器里跑的是旧代码」（本次价格 ×10/缺名称故障的间接根因）。
+    //   manifest 版本随发版递增，浮窗一看便知；悬停可看注入器版本。
+    var _mv = ''; try { _mv = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) {}
+    if (ver) {
+      ver.textContent = _mv ? ('v' + _mv) : (injectVersion ? ('v' + injectVersion) : 'v?');
+      ver.title = injectVersion ? ('注入器 ' + injectVersion) : '';
+    }
   }
 
   function setRecording(on) {

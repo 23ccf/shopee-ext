@@ -334,7 +334,9 @@ async function handleProducts(products, tag) {
 // 极端 ×100000 单位灾难由网站端 normalizePrice(>1e6) 兜底，无需在此处理。
 function sanePrice(p) {
   if (typeof p !== 'number' || !isFinite(p) || p <= 0) return p;
-  return p;
+  // ★ 2026-09-17：NT$ 售价必为整数。小数说明上游单位换算没做完
+  //   （旧版「≥1000 一律 ÷10」不取整，产生 1794.1 这类残留），这里统一取整兜底。
+  return Math.round(p);
 }
 
 // 精简商品字段，压缩 catalog.json 体积（实测 -45%，直接决定网站加载速度）。
@@ -369,7 +371,8 @@ function slimItem(it) {
   if (it.tiers && it.tiers.length) o.tiers = it.tiers;
   if (it.first_seen) o.first_seen = it.first_seen;
   if (it.last_seen) o.last_seen = it.last_seen;   // 「今日录制」板块依赖，必须保留
-  if (it.listed_at && it.listed_at !== it.first_seen) o.listed_at = it.listed_at;
+  // ★ 2026-09-17：上架时间（ctime，unix 秒）。必须是 >0 的整数才写，缺失绝不拿 first_seen 冒充
+  if (it.listed_at && Number(it.listed_at) > 0 && Number(it.listed_at) !== Number(it.first_seen)) o.listed_at = Number(it.listed_at);
   const msku = it.main_sku || {};
   if (msku.name || (msku.price != null && msku.price !== it.price && msku.price >= 30 && msku.price < 1000000)) {
     o.main_sku = msku;

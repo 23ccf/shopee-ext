@@ -21,7 +21,7 @@
   'use strict';
 
   // ★ 版本戳：每次重大修改后递增，用于在诊断/浮窗中 unmistakably 确认浏览器加载的是新代码。
-  var SR_VERSION = '2026-08-26-v3';
+  var SR_VERSION = '2026-09-17-v4';
 
   // ★ 单源字段字典：sales_schema.js 在 MAIN world 已先于本文件注入（见 manifest.json）。
   //   所有销量/价格/icsc 解析统一走 S.resolveItem / S.locateIcs，杜绝分散重复逻辑。
@@ -623,6 +623,8 @@
           name: r.name || '', price: r.price, price_max: r.priceMax, img: r.img || '',
           // ★ tri-state：月销允许 null（未知），绝不补 0（见复盘 §0 错误5）
           month_sold: r.month, sold_total: r.total,
+          // ★ 2026-09-17：上架时间（ctime，unix 秒）随卡下发，网站显示「上架 N 天」
+          ctime: (r.ctime != null) ? r.ctime : undefined,
           shopCapture: true, shopId: r.shopid, shopName: cardShopName,
           _icscMonth: r.month, _hist: r.total, _source: source
         }],
@@ -678,6 +680,7 @@
               // 价格区间上限：item/get 是权威源（能拿到 price_max），拿不到则沿用卡片值
               price_max: (r2.priceMax != null ? r2.priceMax : it.price_max),
               month_sold: r2.month, sold_total: (r2.total != null ? r2.total : it.sold_total),
+              ctime: (r2.ctime != null ? r2.ctime : it.ctime),
               shopCapture: true, shopId: it.shopId, shopName: it.shopName,
               _icscMonth: r2.month, _overlayMonth: r2.month, _overlay: true
             }],

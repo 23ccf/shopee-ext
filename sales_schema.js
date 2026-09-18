@@ -87,7 +87,9 @@
         img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
         // 价格：列表/店铺接口 price/price_min 为「分」(×100)，实测原始值即分（如 ¥77 商品原始值=7700）。
         // 旧值误写 10 → 价格大 10 倍且带小数。÷100 还原。
-        price: price(['price', 'price_min'], 100)
+        // ★ 2026-09-17：新版店铺接口部分卡片价格藏在 item_data.item_card_display_price.price（×100000，
+        //   同 get_item_cards），主键缺失时回退该键，避免大量 price=null（今日实测 42 件里 14 件无价）。
+        price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000 })
       },
       'get_item_cards': {
         itemWrap: 'item_data',
@@ -104,12 +106,18 @@
         itemWrap: 'item_data', id: ['itemid', 'item_id', 'item_data.itemid'],
         shopid: ['shopid', 'shop_id', 'item_data.shopid'],
         month: [icsc('month')], total: [icsc('total')],
+        // ★ 2026-09-17：补 name/img（此前未定义 → 店铺页商品缺名称缺图，网站显示「未采集到名称」）
+        name: ['name', 'title'],
+        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
         price: price(['price', 'price_min'], 100)
       },
       'hot_sales': {
         itemWrap: 'item_data', id: ['itemid', 'item_id', 'item_data.itemid'],
         shopid: ['shopid', 'shop_id', 'item_data.shopid'],
         month: [icsc('month')], total: [icsc('total')],
+        // ★ 2026-09-17：补 name/img（同 rcmd_items）
+        name: ['name', 'title'],
+        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
         price: price(['price', 'price_min'], 100)
       },
       'search_items': {
@@ -137,6 +145,9 @@
         id: ['itemid', 'item_id'], shopid: ['shopid', 'shop_id'],
         month: [k('sold'), icsc('month')],
         total: [k('historical_sold'), k('sold_total'), k('sold')],
+        // ★ 2026-09-17：补 name/img（同 rcmd_items）
+        name: ['name', 'title'],
+        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
         price: price(['price', 'price_min'], 100)
       }
     }
@@ -146,7 +157,7 @@
   function k(key) { return { type: 'key', k: key }; }
   function icsc(which) { return { type: 'icsc', which: which }; }
   function dom(re) { return { type: 'dom', re: re }; }
-  function price(keys, unit) { return { type: 'price', keys: keys, unit: unit }; }
+  function price(keys, unit, alt) { return { type: 'price', keys: keys, unit: unit, alt: alt || null }; }
   // 价格区间上限（2026-09-10 新增）：虾皮对「多规格」商品用 price_max 表示最高价。
   // 换算单位与 price 共用同一 unit，避免「下限除过、上限没除」的错位。
   var PRICE_MAX_KEYS = ['price_max', 'item_data.item_card_display_price.price_max'];
@@ -310,6 +321,13 @@
     if (week == null && month != null && month > 0) week = Math.round(month / 4.345);
     var priceVal = (ep.price && ep.price.type === 'price')
       ? convertPrice(firstDeep(it, ep.price.keys), ep.price.unit) : undefined;
+    // ★ 2026-09-17：主键缺失时按 alt 键组回退（不同键可能量纲不同，须按各自 unit 换算）
+    if (priceVal == null && ep.price && ep.price.type === 'price' && ep.price.alt) {
+      var _alt = convertPrice(firstDeep(it, ep.price.alt.keys), ep.price.alt.unit);
+      if (_alt != null) priceVal = _alt;
+    }
+    // ★ 2026-09-17：ctime = 商品上架时间（unix 秒，全端点语义一致）。缺失 = null（三态）。
+    var ctime = coerceIntLocal(firstDeep(it, ['ctime', 'item_data.ctime']));
     // ★ 价格区间上限：仅当商品确有 price_max 且严格高于现价时才记录（否则视为单一价格）。
     var priceMaxVal;
     if (ep.price && ep.price.type === 'price') {
@@ -321,7 +339,8 @@
     return {
       itemid: String(id), shopid: String(sid),
       month: month, total: total, week: week,
-      price: priceVal, priceMax: priceMaxVal, name: name, img: img
+      price: priceVal, priceMax: priceMaxVal, name: name, img: img,
+      ctime: (ctime != null && ctime > 0) ? ctime : null
     };
   }
   function matchEndpoint(endpoint) {
