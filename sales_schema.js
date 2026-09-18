@@ -143,7 +143,10 @@
         price: price(['price', 'price_min'], 1)
       },
       'get_shop_seo': {
-        id: ['itemid', 'item_id'], shopid: ['shopid', 'shop_id'],
+        // ★ 2026-09-18：与 get_shop_tab 同构 —— 卡片包在 item_data 下，
+        //   不加 itemWrap 则 id/name/price/image 全部取不到（深搜也救不了 id 缺失直接丢弃）
+        itemWrap: 'item_data',
+        id: ['itemid', 'item_id', 'item_data.itemid'], shopid: ['shopid', 'shop_id', 'item_data.shopid'],
         month: [k('sold'), icsc('month')],
         total: [k('historical_sold'), k('sold_total'), k('sold')],
         // ★ 2026-09-17：补 name/img（同 rcmd_items）
@@ -230,6 +233,41 @@
       if (v2 && typeof v2 === 'object') {
         var r2 = findByKeyDeep(v2, keys, depth + 1);
         if (r2 != null) return r2;
+      }
+    }
+    return null;
+  }
+  // ★ 2026-09-18：name/img 深搜兜底。部分店铺卡（广告卡/新结构）把 name/image 藏在
+  //   非标准容器里，主路径 firstDeep(精确点分) 落空 → 整批「未采集到名称」。
+  //   排除 SKIP（变体/营销）与 shop/seller/brand 系容器，防止店铺名/品牌名冒充商品名；
+  //   只收 1~300 字符的字符串值。仅作兜底，主路径命中即不走这里。
+  var TEXT_SKIP = SKIP.concat(['shop', 'shop_info', 'shop_detailed', 'seller',
+                               'seller_info', 'brand', 'shop_rating', 'items', 'item_cards']);
+  function findTextDeep(obj, keys, depth) {
+    if (depth == null) depth = 0;
+    if (depth > 6 || !obj || typeof obj !== 'object') return null;
+    if (Array.isArray(obj)) {
+      for (var i = 0; i < obj.length; i++) {
+        var r0 = findTextDeep(obj[i], keys, depth);
+        if (r0 != null) return r0;
+      }
+      return null;
+    }
+    for (var kk in obj) {
+      if (!obj.hasOwnProperty(kk)) continue;
+      if (TEXT_SKIP.indexOf(kk) >= 0) continue;
+      if (keys.indexOf(kk) >= 0) {
+        var v0 = obj[kk];
+        if (typeof v0 === 'string' && v0.length > 0 && v0.length <= 300) return v0;
+      }
+    }
+    for (var k3 in obj) {
+      if (!obj.hasOwnProperty(k3)) continue;
+      if (TEXT_SKIP.indexOf(k3) >= 0) continue;
+      var v3 = obj[k3];
+      if (v3 && typeof v3 === 'object') {
+        var r3 = findTextDeep(v3, keys, depth + 1);
+        if (r3 != null) return r3;
       }
     }
     return null;
@@ -358,7 +396,10 @@
     // ★ 2026-09-17：ctime = 商品上架时间（unix 秒，全端点语义一致）。缺失 = null（三态）。
     var ctime = coerceIntLocal(firstDeep(it, ['ctime', 'item_data.ctime']));
     var name = firstDeep(it, ep.name || []);
+    // ★ 2026-09-18：主路径缺失时深搜兜底（findTextDeep，排除 shop/brand 容器）
+    if (name == null) name = findTextDeep(it, ['name', 'title']);
     var img = firstDeep(it, ep.img || []);
+    if (img == null) img = findTextDeep(it, ['image', 'thumb_url']);
     return {
       itemid: String(id), shopid: String(sid),
       month: month, total: total, week: week,

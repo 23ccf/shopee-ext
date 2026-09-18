@@ -670,6 +670,26 @@
     };
   }
 
+  // ★ 2026-09-18：从卡片叶子元素里挑最长文本当商品名（剔除销量/价格/按钮 token）。
+  //   「現貨/出貨/台灣」这类词常出现在真实商品名里，不剔除；只剔「月銷量N / 已售N / $N」
+  //   这类带数字的销售 token 和按钮文案，避免销量文案/按钮冒充商品名。
+  function pickNameFromCard(card) {
+    try {
+      var bad = /(月[銷销]量|已售[出]?|NT?\$\s*[\d,.]+|加入[購购]物[車车]|立即[購购买]|去[結结]帳|聊聊|領[券取]|評[價价]\s*[論论]?)/;
+      var els = card.querySelectorAll ? card.querySelectorAll('span,div,h1,h2,h3,h4,p,a') : [];
+      var best = '';
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.children && el.children.length > 3) continue; // 只要叶子/小节点
+        var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t.length < 6 || t.length > 180) continue;
+        if (bad.test(t)) continue;
+        if (t.length > best.length) best = t;
+      }
+      return best ? best.slice(0, 150) : '';
+    } catch (e) { return ''; }
+  }
+
   // ---- 店铺页 DOM 兜底：API 没给月销时，从卡片可见文本读「月銷量 X」 ----
   function scrapeShopCards() {
     if (!recordingOn) return;
@@ -691,11 +711,13 @@
           card = a.closest('[data-sqe="item"], [data-sqe="name"], .shop-search-result-item, .shopee-search-item-result__item, .full-page-container .shop-page__items .shop-search-result-item');
         }
         if (!card) {
+          // ★ 2026-09-18：向上找「同时含 销量文案 + 价格」的祖先 —— 新版店铺页 <a> 常只包住
+          //   图片，名称/价格在 a 的兄弟节点里，取小容器会漏（实测整批「未采集到名称/价格未采集」）。
           var p = a.parentElement, steps = 0;
-          while (p && steps < 8) {
+          while (p && steps < 10) {
             if (p.querySelector && p.querySelector('img')) {
               var pt = p.textContent || '';
-              if (/已售[出]?|月[銷销]量?|\$|\NT\$/.test(pt)) { card = p; break; }
+              if (/已售[出]?|月[銷销]量?/.test(pt) && /\$/.test(pt)) { card = p; break; }
             }
             p = p.parentElement; steps++;
           }
@@ -715,8 +737,16 @@
         if (monthSold <= 0 && totalSold <= 0) continue;
         found++;
         var price = extractPriceFromDOMText(text);
-        var imgEl = card.querySelector('img') || a.querySelector('img');
-        var imgSrc = imgEl ? (imgEl.getAttribute('data-src') || imgEl.getAttribute('data-original') || imgEl.src || imgEl.currentSrc || '') : '';
+        var imgEl = card.querySelector('img,source[srcset]') || a.querySelector('img,source[srcset]');
+        var imgSrc = '';
+        if (imgEl) {
+          var _ss = imgEl.getAttribute('srcset');
+          imgSrc = imgEl.getAttribute('data-src') || imgEl.getAttribute('data-original') ||
+                   (_ss ? _ss.split(',')[0].trim().split(/\s+/)[0] : '') ||
+                   imgEl.getAttribute('src') || imgEl.currentSrc || '';
+        }
+        // ★ 懒加载占位（data: 空 base64）不算采集到
+        if (/^data:/.test(imgSrc)) imgSrc = '';
         if (imgSrc && imgSrc.indexOf('http') !== 0 && imgSrc.indexOf('//') === 0) imgSrc = 'https:' + imgSrc;
         var name = (a.getAttribute('title') || '').trim();
         if (!name && imgEl) name = (imgEl.getAttribute('alt') || '').trim();
@@ -724,6 +754,9 @@
           var nameEl = card.querySelector('[data-sqe="name"]') || a.querySelector('[data-sqe="name"]');
           if (nameEl) name = nameEl.textContent.trim();
         }
+        // ★ 2026-09-18：再兜底 —— 从卡片叶子文本挑最长一条当名称（剔除销量/价格/按钮 token）。
+        //   新版店铺页 <a> 只包图片、无 data-sqe 标记，旧逻辑 name 恒空 →「未采集到名称」。
+        if (!name) name = pickNameFromCard(card);
         if (!name) name = (a.textContent || '').trim().slice(0, 150);
         seenIds[key] = true;
         var prod = {
