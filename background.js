@@ -334,9 +334,9 @@ async function handleProducts(products, tag) {
 // 极端 ×100000 单位灾难由网站端 normalizePrice(>1e6) 兜底，无需在此处理。
 function sanePrice(p) {
   if (typeof p !== 'number' || !isFinite(p) || p <= 0) return p;
-  // ★ 2026-09-17：NT$ 售价必为整数。小数说明上游单位换算没做完
-  //   （旧版「≥1000 一律 ÷10」不取整，产生 1794.1 这类残留），这里统一取整兜底。
-  return Math.round(p);
+  // ★ 2026-09-18：保留 2 位小数。蝦皮卖家真实挂价可带小数（实测 179.41 / 199.7），
+  //   一律取整会失真；只归整浮点噪声。旧版「÷10 不取整」的残留源已随 v3.2.3 换算修复消除。
+  return Math.round(p * 100) / 100;
 }
 
 // 精简商品字段，压缩 catalog.json 体积（实测 -45%，直接决定网站加载速度）。

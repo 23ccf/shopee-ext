@@ -86,10 +86,11 @@
         name: ['name', 'title'],
         img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
         // 价格：列表/店铺接口 price/price_min 为「分」(×100)，实测原始值即分（如 ¥77 商品原始值=7700）。
-        // 旧值误写 10 → 价格大 10 倍且带小数。÷100 还原。
-        // ★ 2026-09-17：新版店铺接口部分卡片价格藏在 item_data.item_card_display_price.price（×100000，
-        //   同 get_item_cards），主键缺失时回退该键，避免大量 price=null（今日实测 42 件里 14 件无价）。
-        price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000 })
+        // ★ 2026-09-18：strategy:'min' —— price 字段可能是「划线原价」（实测森馬洞洞鞋
+        //   price=199700 分 → NT$1,997，而实卖折后价在 item_card_display_price.price=199.7），
+        //   蝦皮卡片展示价 = 各候选来源换算后的【最小值】（展示价本身也取最低规格），
+        //   对「主键是原价」「主键缺失」「无折价」三种情况都稳健；price_max 跟随胜出来源的 unit。
+        price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000, strategy: 'min' })
       },
       'get_item_cards': {
         itemWrap: 'item_data',
@@ -157,7 +158,7 @@
   function k(key) { return { type: 'key', k: key }; }
   function icsc(which) { return { type: 'icsc', which: which }; }
   function dom(re) { return { type: 'dom', re: re }; }
-  function price(keys, unit, alt) { return { type: 'price', keys: keys, unit: unit, alt: alt || null }; }
+  function price(keys, unit, alt) { return { type: 'price', keys: keys, unit: unit, alt: alt || null, strategy: (alt && alt.strategy) || null }; }
   // 价格区间上限（2026-09-10 新增）：虾皮对「多规格」商品用 price_max 表示最高价。
   // 换算单位与 price 共用同一 unit，避免「下限除过、上限没除」的错位。
   var PRICE_MAX_KEYS = ['price_max', 'item_data.item_card_display_price.price_max'];
@@ -269,7 +270,9 @@
     if (raw == null) return undefined;
     var n = (typeof raw === 'number') ? raw : parseFloat(String(raw).replace(/,/g, ''));
     if (isNaN(n) || n <= 0) return undefined;
-    return Math.round(n / unit);
+    // ★ 2026-09-18：保留 2 位小数。蝦皮卖家真实挂价可带小数（实测 179.41 / 199.7），
+    //   一律取整会失真；只归整换算浮点噪声（198.99999 -> 199）。
+    return Math.round(n / unit * 100) / 100;
   }
   function firstDeep(it, paths) {
     if (!paths) return null;
@@ -319,21 +322,41 @@
     var total = resolveSources(it, ep.total);
     var week = resolveSources(it, ep.week || []);
     if (week == null && month != null && month > 0) week = Math.round(month / 4.345);
-    var priceVal = (ep.price && ep.price.type === 'price')
-      ? convertPrice(firstDeep(it, ep.price.keys), ep.price.unit) : undefined;
-    // ★ 2026-09-17：主键缺失时按 alt 键组回退（不同键可能量纲不同，须按各自 unit 换算）
-    if (priceVal == null && ep.price && ep.price.type === 'price' && ep.price.alt) {
-      var _alt = convertPrice(firstDeep(it, ep.price.alt.keys), ep.price.alt.unit);
-      if (_alt != null) priceVal = _alt;
+    var priceVal, priceMaxVal;
+    if (ep.price && ep.price.type === 'price') {
+      if (ep.price.strategy === 'min') {
+        // ★ 2026-09-18：候选制取最小 = 卡片展示价；price_max 取「胜出来源」同源的 max 键、
+        //   用该来源自己的 unit 换算（避免 price_max 用 ×100 去解 ×100000 的 display 价导致 1000 倍错位）。
+        var _cands = [];
+        (ep.price.keys || []).forEach(function (k) {
+          var v = convertPrice(firstDeep(it, [k]), ep.price.unit);
+          if (v != null) _cands.push({ v: v, u: ep.price.unit, mr: firstDeep(it, ['price_max']) });
+        });
+        if (ep.price.alt) (ep.price.alt.keys || []).forEach(function (k) {
+          var v = convertPrice(firstDeep(it, [k]), ep.price.alt.unit);
+          if (v != null) _cands.push({ v: v, u: ep.price.alt.unit,
+            mr: firstDeep(it, [String(k).replace(/\.price$/, '.price_max')]) });
+        });
+        if (_cands.length) {
+          var _win = _cands.reduce(function (a, b) { return b.v < a.v ? b : a; });
+          priceVal = _win.v;
+          var _mv = convertPrice(_win.mr, _win.u);
+          if (_mv != null && _mv > priceVal) priceMaxVal = _mv;
+        }
+      } else {
+        // 主键首个命中；缺失时按 alt 键组回退（不同键可能量纲不同，须按各自 unit 换算）
+        priceVal = convertPrice(firstDeep(it, ep.price.keys), ep.price.unit);
+        if (priceVal == null && ep.price.alt) {
+          var _alt = convertPrice(firstDeep(it, ep.price.alt.keys), ep.price.alt.unit);
+          if (_alt != null) priceVal = _alt;
+        }
+        // ★ 价格区间上限：仅当商品确有 price_max 且严格高于现价时才记录（否则视为单一价格）。
+        var _m = convertPrice(firstDeep(it, ep.price.maxKeys || PRICE_MAX_KEYS), ep.price.unit);
+        if (_m != null && priceVal != null && _m > priceVal) priceMaxVal = _m;
+      }
     }
     // ★ 2026-09-17：ctime = 商品上架时间（unix 秒，全端点语义一致）。缺失 = null（三态）。
     var ctime = coerceIntLocal(firstDeep(it, ['ctime', 'item_data.ctime']));
-    // ★ 价格区间上限：仅当商品确有 price_max 且严格高于现价时才记录（否则视为单一价格）。
-    var priceMaxVal;
-    if (ep.price && ep.price.type === 'price') {
-      var _m = convertPrice(firstDeep(it, ep.price.maxKeys || PRICE_MAX_KEYS), ep.price.unit);
-      if (_m != null && priceVal != null && _m > priceVal) priceMaxVal = _m;
-    }
     var name = firstDeep(it, ep.name || []);
     var img = firstDeep(it, ep.img || []);
     return {
