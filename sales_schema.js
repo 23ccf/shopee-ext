@@ -347,6 +347,28 @@
     return null;
   }
   // ★ 统一解析入口：返回 tri-state（未知 = null，绝不补 0）
+
+  // ★ 2026-09-19：规格词不是商品名 —— 变体名（款式/顏色/尺寸…）会被主路径或深搜兜底
+  //   当成 name 下发，卡片显示成「款式」且无价格（线上实测 12 件）。一律视为缺失。
+  var SPEC_NAME_RE = /^(款式|顏色|颜色|尺寸|規格|规格|型號|型号|選項|选项|分類|分类|類別|类别)$/;
+  function isSpecName(s) {
+    if (s == null) return true;
+    var t = String(s).replace(/\s+/g, '');
+    if (!t) return true;
+    return SPEC_NAME_RE.test(t);
+  }
+  // ★ 2026-09-19：price_max 单位错位防线 —— max 必须与 price 同量纲。
+  //   老端点(unit=100)遇到新版嵌套 ×100000 的 max 值会放大 1000 倍（实测 189 → 355000，
+  //   真值 3550）。规则：max ≥ price×50 即视为错位，÷100/÷1000 落回 (price, price×50) 才收，否则丢弃。
+  function saneMax(mv, pv) {
+    if (mv == null || pv == null || !(pv > 0) || !isFinite(mv)) return null;
+    if (mv > pv && mv < pv * 50) return mv;
+    for (var d = 100; d <= 1000; d *= 10) {
+      var c = Math.round(mv / d * 100) / 100;
+      if (c > pv && c < pv * 50) return c;
+    }
+    return null;
+  }
   function resolveItem(item, endpoint) {
     var epKey = matchEndpoint(endpoint);
     var ep = SR_SCHEMA.endpoints[epKey];
@@ -375,11 +397,11 @@
           if (v != null) _cands.push({ v: v, u: ep.price.alt.unit,
             mr: firstDeep(it, [String(k).replace(/\.price$/, '.price_max')]) });
         });
-        if (_cands.length) {
+    if (_cands.length) {
           var _win = _cands.reduce(function (a, b) { return b.v < a.v ? b : a; });
           priceVal = _win.v;
-          var _mv = convertPrice(_win.mr, _win.u);
-          if (_mv != null && _mv > priceVal) priceMaxVal = _mv;
+          var _mv = saneMax(convertPrice(_win.mr, _win.u), priceVal);
+          if (_mv != null) priceMaxVal = _mv;
         }
       } else {
         // 主键首个命中；缺失时按 alt 键组回退（不同键可能量纲不同，须按各自 unit 换算）
@@ -389,8 +411,9 @@
           if (_alt != null) priceVal = _alt;
         }
         // ★ 价格区间上限：仅当商品确有 price_max 且严格高于现价时才记录（否则视为单一价格）。
-        var _m = convertPrice(firstDeep(it, ep.price.maxKeys || PRICE_MAX_KEYS), ep.price.unit);
-        if (_m != null && priceVal != null && _m > priceVal) priceMaxVal = _m;
+        //   2026-09-19：过 saneMax 单位错位防线（详见函数注释）。
+        var _m = saneMax(convertPrice(firstDeep(it, ep.price.maxKeys || PRICE_MAX_KEYS), ep.price.unit), priceVal);
+        if (_m != null) priceMaxVal = _m;
       }
     }
     // ★ 2026-09-17：ctime = 商品上架时间（unix 秒，全端点语义一致）。缺失 = null（三态）。
@@ -398,6 +421,8 @@
     var name = firstDeep(it, ep.name || []);
     // ★ 2026-09-18：主路径缺失时深搜兜底（findTextDeep，排除 shop/brand 容器）
     if (name == null) name = findTextDeep(it, ['name', 'title']);
+    // ★ 2026-09-19：规格词（款式/顏色/尺寸…）不是商品名，视为缺失（宁可留空走体检条重录）
+    if (isSpecName(name)) name = null;
     var img = firstDeep(it, ep.img || []);
     if (img == null) img = findTextDeep(it, ['image', 'thumb_url']);
     return {

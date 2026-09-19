@@ -397,10 +397,22 @@ function mergeFields(oldItem, newItem) {
       continue;
     }
     if (k === 'price_max') {
-      // 价格区间上限：必须严格高于现价才保留（旧值可能是别的字段误入）
+      // 价格区间上限：必须严格高于现价才保留（旧值可能是别的字段误入）。
+      // ★ 2026-09-19：单位错位修复 —— max ≥ 现价×50 视为量纲错（×100000 按 ×100 解 → 大 1000 倍），
+      //   ÷100/÷1000 后落回 (现价, 现价×50) 才收，否则丢弃（宁缺勿错）。
       const nv2 = sanePrice(Number(v));
       const base = sanePrice(Number(out.price));
-      if (!isNaN(nv2) && nv2 < 1000000 && (!isNaN(base) ? nv2 > base : nv2 >= 30)) out[k] = nv2;
+      if (!isNaN(nv2) && nv2 < 1000000) {
+        if (!isNaN(base) && base > 0) {
+          if (nv2 > base && nv2 < base * 50) out[k] = nv2;
+          else {
+            for (let d = 100; d <= 1000; d *= 10) {
+              const c = Math.round(nv2 / d * 100) / 100;
+              if (c > base && c < base * 50) { out[k] = c; break; }
+            }
+          }
+        } else if (nv2 >= 30) out[k] = nv2;
+      }
       continue;
     }
     if (['month_sold', 'week_sold', 'total_sold', 'sold', 'sold_total', 'rating', 'liked', 'reviews', 'stock'].includes(k)) {

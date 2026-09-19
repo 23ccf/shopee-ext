@@ -758,6 +758,10 @@
         //   新版店铺页 <a> 只包图片、无 data-sqe 标记，旧逻辑 name 恒空 →「未采集到名称」。
         if (!name) name = pickNameFromCard(card);
         if (!name) name = (a.textContent || '').trim().slice(0, 150);
+        // ★ 2026-09-19：规格词（款式/顏色/尺寸…）与超短文本不是商品名，宁可留空走体检条重录
+        //   （线上实测 12 件 name=款式/顏色、无价格的脏卡）。
+        if (name && /^(款式|顏色|颜色|尺寸|規格|规格|型號|型号|選項|选项|分類|分类|類別|类别)$/.test(name.replace(/\s+/g, ''))) name = '';
+        if (name && name.replace(/\s+/g, '').length < 2) name = '';
         seenIds[key] = true;
         var prod = {
           id: key, itemid: Number(si.itemid), shopid: Number(si.shopid),
