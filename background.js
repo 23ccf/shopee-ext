@@ -354,11 +354,11 @@ function slimItem(it) {
     ? Number(it.week_sold)
     : (ms > 0 ? Math.round(ms / 4.345) : 0);
   if (wk) o.week_sold = wk;
-  // 价格字段：必为合理商品售价（>=30且<1000000），低于 30 通常是运费/优惠券/分期等小额，
-  // 绝不能把它当售价推到 GitHub（避免上次的 price=10 / 0 把网站弄错）。
-  // 先过 sanePrice 兜底修正残留的单位错误（旧录制的大 10 倍价格），正常价格原样通过。
+  // 价格字段：任何 >0 且 <1000000 的售价都收（NT$10 等低价商品是合法售价，不再丢弃）。
+  // 运费/优惠券/分期等小额已由采集端 extractPriceFromDOMText 的 FEE_BEFORE 护栏过滤，
+  // 或本就是 API 的明确商品价字段，不会混入。先过 sanePrice 兜底修正残留单位错误。
   const pr = sanePrice(Number(it.price));
-  if (isFinite(pr) && pr >= 30 && pr < 1000000) o.price = pr;
+  if (isFinite(pr) && pr > 0 && pr < 1000000) o.price = pr;
   // ★ 价格区间上限（2026-09-10）：多规格商品的最高价。同样过 sanePrice，
   //   且必须严格高于现价才算「区间」——否则就是脏数据，宁可不写。
   const pmx = sanePrice(Number(it.price_max));
@@ -374,7 +374,7 @@ function slimItem(it) {
   // ★ 2026-09-17：上架时间（ctime，unix 秒）。必须是 >0 的整数才写，缺失绝不拿 first_seen 冒充
   if (it.listed_at && Number(it.listed_at) > 0 && Number(it.listed_at) !== Number(it.first_seen)) o.listed_at = Number(it.listed_at);
   const msku = it.main_sku || {};
-  if (msku.name || (msku.price != null && msku.price !== it.price && msku.price >= 30 && msku.price < 1000000)) {
+  if (msku.name || (msku.price != null && msku.price !== it.price && msku.price > 0 && msku.price < 1000000)) {
     o.main_sku = msku;
   }
   if (it.keyword) o.keyword = it.keyword;
@@ -383,8 +383,8 @@ function slimItem(it) {
 }
 
 // 合并字段：newItem 里的有效非零数值优先覆盖，零/null 不覆盖 old 的有效值。
-// 价格字段：newItem.price 必须是合理商品售价(>=30)才覆盖；避免扩展误抓的运费/优惠券
-//   (如「現折$10」「$0 起」「6期x $33」等)将 correct 的旧售价覆盖掉。
+// 价格字段：newItem.price 必须 >0 才算真售价；运费/优惠券/分期等小额已由采集端护栏过滤
+//   （FEE_BEFORE 跳过「現折$10」「$0 起」「6期x $33」等），此处只防 0/负数覆盖。
 function mergeFields(oldItem, newItem) {
   const out = Object.assign({}, oldItem);
   for (const k of Object.keys(newItem)) {
@@ -392,8 +392,8 @@ function mergeFields(oldItem, newItem) {
     if (v === undefined) continue;
     if (k === 'price') {
       const nv = sanePrice(Number(v));
-      // 价格是敏感字段：必须 >=30 才算「真售价」
-      if (!isNaN(nv) && nv >= 30 && nv < 1000000) out[k] = nv;
+      // 价格是敏感字段：>0 才算「真售价」（低价商品如 NT$10 是合法售价）
+      if (!isNaN(nv) && nv > 0 && nv < 1000000) out[k] = nv;
       continue;
     }
     if (k === 'price_max') {
@@ -411,7 +411,7 @@ function mergeFields(oldItem, newItem) {
               if (c > base && c < base * 50) { out[k] = c; break; }
             }
           }
-        } else if (nv2 >= 30) out[k] = nv2;
+        } else if (nv2 > 0) out[k] = nv2;
       }
       continue;
     }

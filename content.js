@@ -201,7 +201,7 @@
         var mm = t.match(/^\$\s*([\d,]+)(?:\s*[~\u2013\u2014-]\s*\$\s*([\d,]+))?$/);
         if (!mm) continue;
         var lo = parseNum(mm[1]);
-        if (lo == null || lo < 10) continue;
+        if (lo == null || lo <= 0) continue;
         var hi = mm[2] ? parseNum(mm[2]) : null;
         return { price: lo, price_max: (hi != null && hi > lo) ? hi : null };
       }
@@ -1500,7 +1500,7 @@
         if (!isDetailApi) {
           browseCount++;
           if (rec.month_sold > 0) browseMonthCount++;
-          var hasData = (rec.month_sold > 0 || rec.total_sold > 0 || (rec.price && rec.price >= 30));
+          var hasData = (rec.month_sold > 0 || rec.total_sold > 0 || (rec.price && rec.price > 0));
           if (!browseCapture || !hasData) {
             updateFloat();
             continue;   // 浏览即录关闭，或该商品无有效销量/价格 → 仅计入已扫计数，不入库

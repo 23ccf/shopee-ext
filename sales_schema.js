@@ -110,7 +110,10 @@
         // ★ 2026-09-17：补 name/img（此前未定义 → 店铺页商品缺名称缺图，网站显示「未采集到名称」）
         name: ['name', 'title'],
         img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
-        price: price(['price', 'price_min'], 100)
+        // ★ 2026-09-19c：补 item_card_display_price 的 alt（×100000）——新版卡片把实卖价放在这，
+        //   顶层 price 缺失时 price=undefined → 网站「价格未采集」（线上实测 rcmd/hot 卡整批无价）。
+        //   strategy:'min' 与 get_shop_tab 同源：取各候选最小值=展示价。
+        price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000, strategy: 'min' })
       },
       'hot_sales': {
         itemWrap: 'item_data', id: ['itemid', 'item_id', 'item_data.itemid'],
@@ -119,7 +122,7 @@
         // ★ 2026-09-17：补 name/img（同 rcmd_items）
         name: ['name', 'title'],
         img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
-        price: price(['price', 'price_min'], 100)
+        price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000, strategy: 'min' })
       },
       'search_items': {
         id: ['itemid', 'item_id'], shopid: ['shopid', 'shop_id'],
