@@ -21,7 +21,7 @@
   'use strict';
 
   // ★ 版本戳：每次重大修改后递增，用于在诊断/浮窗中 unmistakably 确认浏览器加载的是新代码。
-  var SR_VERSION = '2026-09-19-v3';
+  var SR_VERSION = '2026-09-19-v4';
 
   // ★ 单源字段字典：sales_schema.js 在 MAIN world 已先于本文件注入（见 manifest.json）。
   //   所有销量/价格/icsc 解析统一走 S.resolveItem / S.locateIcs，杜绝分散重复逻辑。
@@ -621,6 +621,8 @@
         items: [{
           itemid: r.itemid, shopid: r.shopid,
           name: r.name || '', price: r.price, price_max: r.priceMax, img: r.img || '',
+          // ★ 2026-09-19：主图是视频封面（_cover）→ 上游改从 DOM 卡片换图 / 由精修补真主图
+          imgIsCover: !!r.imgIsCover,
           // ★ tri-state：月销允许 null（未知），绝不补 0（见复盘 §0 错误5）
           month_sold: r.month, sold_total: r.total,
           // ★ 2026-09-17：上架时间（ctime，unix 秒）随卡下发，网站显示「上架 N 天」
@@ -639,13 +641,30 @@
   //   拿权威月销(item.sold)。节流 1 件/3s、单店上限 30，控风控。----
   var _shopUpgradeQ = [];
   var _shopUpgradeActive = false;
+  var _shopUpgradeStopUntil = 0;     // ★ 遇风控/403 后的冷却截止时间戳（保护账号，绝不对着风控硬刷）
+  // 每件间隔 2.6~4.0 秒随机：稳定节流比固定 3 秒更不像机器
+  function _upgradeDelay() { return 2600 + Math.round(Math.random() * 1400); }
+  // ★ 2026-09-19 扩展：原条件只有「月销缺失且总销>=30」，导致两类线上故障漏网：
+  //   ① 价格未采集（缺价商品没人补）② 主图是视频封面（列表接口只给 _cover，必须用详情接口取真主图）。
+  //   现在只要「缺月销 / 缺价 / 主图是视频封面」任一命中就入队，并用 item/get 一次补齐
+  //   月销 + 价格 + price_max(区间) + 真主图 —— 一个请求解决四类问题。
   function enqueueShopMonthUpgrade(shopPosts) {
+    // ★ 风控冷却期内不再入队：否则用户继续滚动会把刚停下的队列又拉起来
+    if (_shopUpgradeStopUntil && Date.now() < _shopUpgradeStopUntil) return;
     for (var i = 0; i < shopPosts.length; i++) {
       var it = shopPosts[i] && shopPosts[i].items && shopPosts[i].items[0];
       if (!it) continue;
-      if ((it._icscMonth == null || it._icscMonth <= 0) && (it._hist == null || it._hist >= 30)) _shopUpgradeQ.push(it);
+      var lacksMonth = (it._icscMonth == null || it._icscMonth <= 0);
+      var lacksPrice = !(Number(it.price) > 0);
+      var coverImg = (it.imgIsCover === true);
+      if (!lacksMonth && !lacksPrice && !coverImg) continue;
+      it._needRank = (lacksPrice ? 0 : (coverImg ? 1 : 2));   // 缺价最急 → 封面图 → 缺月销
+      _shopUpgradeQ.push(it);
     }
-    if (_shopUpgradeQ.length > 30) _shopUpgradeQ.length = 30;
+    if (_shopUpgradeQ.length > 40) {
+      _shopUpgradeQ.sort(function (a, b) { return (a._needRank || 9) - (b._needRank || 9); });
+      _shopUpgradeQ.length = 40;
+    }
     if (!_shopUpgradeActive && _shopUpgradeQ.length) { _shopUpgradeActive = true; pumpShopUpgrade(); }
   }
   function pumpShopUpgrade() {
@@ -664,36 +683,59 @@
       init = Object.assign({}, init, { headers: f });
     }
     var url = 'https://shopee.tw/api/v4/item/get?itemid=' + encodeURIComponent(it.itemid) + '&shopid=' + encodeURIComponent(it.shopid);
-    if (!realFetch) { setTimeout(pumpShopUpgrade, 3000); return; }
+    if (!realFetch) { setTimeout(pumpShopUpgrade, _upgradeDelay()); return; }
     realFetch(url, init).then(function (r) {
-      if (!r.ok) { postLog('店铺月销精修', 'status=' + r.status); setTimeout(pumpShopUpgrade, 3000); return; }
+      if (!r.ok) {
+        postLog('店铺月销精修', 'status=' + r.status);
+        // ★ 2026-09-19：403/429/5xx = 风控或异常 → 立刻清空队列停手，绝不对着风控硬刷
+        if (r.status === 403 || r.status === 429 || r.status >= 500) {
+          _shopUpgradeQ.length = 0;
+          _shopUpgradeStopUntil = Date.now() + 60000;   // 冷却 60 秒
+          _shopUpgradeActive = false;
+          postLog('店铺精修', '遇到 ' + r.status + '，已停止本店精修（保护账号）');
+          return;
+        }
+        setTimeout(pumpShopUpgrade, _upgradeDelay()); return;
+      }
       r.clone().json().then(function (json) {
         // ★ 反转依赖：item/get 仅作「覆盖层」。用 S.resolveItem 统一解析，
         //   仅当拿到具体月销才覆盖卡片 icsc 值；失败/未知则【保留卡片 icsc 值，绝不清零】。
         var item = findItem(json, true) || findItem(json, false);
         var r2 = item ? S.resolveItem(item, 'item/get') : null;
-        if (r2 && r2.month != null) {
+        var hasMonth = (r2 && r2.month != null);
+        var hasPrice = (r2 && r2.price != null && r2.price > 0);
+        var betterImg = (r2 && r2.img && !r2.imgIsCover) ? r2.img : null;
+        if (hasMonth || hasPrice || betterImg) {
+          // ★ 2026-09-19：一次 item/get 同时补齐【月销 + 价格 + 区间(price_max) + 真主图】，
+          //   修掉线上「月销未知 / 价格未采集 / 主图变视频首页 / 价格无区间」四类问题。
+          var mergedImg = betterImg || it.img;
           post({
             endpoint: '/api/v4/item/get',
             items: [{
-              itemid: it.itemid, shopid: it.shopid, name: it.name, price: it.price, img: it.img,
+              itemid: it.itemid, shopid: it.shopid, name: (r2 && r2.name) || it.name,
+              price: hasPrice ? r2.price : it.price,
+              img: mergedImg,
+              imgIsCover: !!S.isVideoCover(mergedImg),
               // 价格区间上限：item/get 是权威源（能拿到 price_max），拿不到则沿用卡片值
-              price_max: (r2.priceMax != null ? r2.priceMax : it.price_max),
-              month_sold: r2.month, sold_total: (r2.total != null ? r2.total : it.sold_total),
-              ctime: (r2.ctime != null ? r2.ctime : it.ctime),
+              price_max: (r2 && r2.priceMax != null ? r2.priceMax : it.price_max),
+              month_sold: hasMonth ? r2.month : it.month_sold,
+              sold_total: (r2 && r2.total != null ? r2.total : it.sold_total),
+              ctime: (r2 && r2.ctime != null ? r2.ctime : it.ctime),
               shopCapture: true, shopId: it.shopId, shopName: it.shopName,
-              _icscMonth: r2.month, _overlayMonth: r2.month, _overlay: true
+              _icscMonth: hasMonth ? r2.month : it._icscMonth, _overlayMonth: hasMonth ? r2.month : null, _overlay: true
             }],
             authoritativeMonth: true, source: 'shop-upgrade', shopCapture: true, shopId: it.shopId, shopName: it.shopName
           });
-          postLog('店铺月销精修', '✓ ' + it.itemid + ' 月销=' + r2.month + '（覆盖卡片 icsc）');
+          postLog('店铺精修', '✓ ' + it.itemid + ' 月销=' + (hasMonth ? r2.month : '沿用')
+                 + ' 价=' + (hasPrice ? r2.price : '沿用') + ' 区间=' + (r2 && r2.priceMax ? r2.priceMax : '无')
+                 + ' 主图=' + (betterImg ? '换真图' : '沿用'));
         } else {
           // ★ 不再清零：item/get 无月销(未知) → 保留卡片 icsc 已得值
           postLog('店铺月销精修', 'item/get 无月销(未知)，保留卡片 icsc 值（不清零）');
         }
-        setTimeout(pumpShopUpgrade, 3000);
-      }).catch(function (e) { setTimeout(pumpShopUpgrade, 3000); });
-    }).catch(function (e) { setTimeout(pumpShopUpgrade, 3000); });
+        setTimeout(pumpShopUpgrade, _upgradeDelay());
+      }).catch(function (e) { setTimeout(pumpShopUpgrade, _upgradeDelay()); });
+    }).catch(function (e) { setTimeout(pumpShopUpgrade, _upgradeDelay()); });
   }
 
   // 用页面真实 header 构造一个尽可能像「页面自发」的请求 init。

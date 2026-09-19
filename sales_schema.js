@@ -55,13 +55,13 @@
                 k('cumulative_sold'), icsc('total')],
         week: [k('week_sold'), k('weekly_sold')],
         price: price(['price', 'price_min'], 100000),
-        name: ['name', 'title'], img: ['image', 'images']
+        name: ['name', 'title'], img: IMG_PATHS
       },
       'item/get_rating': {
         id: ['itemid', 'item_id'], shopid: ['shopid', 'shop_id'],
         month: [k('sold'), k('monthly_sold'), icsc('month')],
         total: [k('historical_sold'), k('sold_total'), k('total_sold'), icsc('total')],
-        price: price(['price', 'price_min'], 100000), name: ['name', 'title'], img: ['image', 'images']
+        price: price(['price', 'price_min'], 100000), name: ['name', 'title'], img: IMG_PATHS
       },
       'pdp/get_pc': {
         id: ['itemid', 'item_id'], shopid: ['shopid', 'shop_id'],
@@ -84,7 +84,7 @@
         month: [icsc('month')],
         total: [icsc('total')],
         name: ['name', 'title'],
-        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
+        img: IMG_PATHS,  // ★ 2026-09-19：含 images（静态主图），排除视频封面（见 pickImg）
         // 价格：列表/店铺接口 price/price_min 为「分」(×100)，实测原始值即分（如 ¥77 商品原始值=7700）。
         // ★ 2026-09-18：strategy:'min' —— price 字段可能是「划线原价」（实测森馬洞洞鞋
         //   price=199700 分 → NT$1,997，而实卖折后价在 item_card_display_price.price=199.7），
@@ -99,7 +99,7 @@
         month: [icsc('month')],
         total: [icsc('total')],
         name: ['name', 'title'],
-        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
+        img: IMG_PATHS,  // ★ 2026-09-19：含 images（静态主图），排除视频封面（见 pickImg）
         // 金矿接口：item_data.item_card_display_price.price 实测 ×100000
         price: price(['item_data.item_card_display_price.price'], 100000)
       },
@@ -109,7 +109,7 @@
         month: [icsc('month')], total: [icsc('total')],
         // ★ 2026-09-17：补 name/img（此前未定义 → 店铺页商品缺名称缺图，网站显示「未采集到名称」）
         name: ['name', 'title'],
-        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
+        img: IMG_PATHS,  // ★ 2026-09-19：含 images（静态主图），排除视频封面（见 pickImg）
         // ★ 2026-09-19c：补 item_card_display_price 的 alt（×100000）——新版卡片把实卖价放在这，
         //   顶层 price 缺失时 price=undefined → 网站「价格未采集」（线上实测 rcmd/hot 卡整批无价）。
         //   strategy:'min' 与 get_shop_tab 同源：取各候选最小值=展示价。
@@ -121,7 +121,7 @@
         month: [icsc('month')], total: [icsc('total')],
         // ★ 2026-09-17：补 name/img（同 rcmd_items）
         name: ['name', 'title'],
-        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
+        img: IMG_PATHS,  // ★ 2026-09-19：含 images（静态主图），排除视频封面（见 pickImg）
         price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000, strategy: 'min' })
       },
       'search_items': {
@@ -129,13 +129,16 @@
         // 列表 item_basic.sold = 近30天月销（recorder.py 已验证）
         month: [k('sold'), icsc('month')],
         total: [k('historical_sold'), k('sold_total'), k('total_sold'), k('sold')],
-        price: price(['price', 'price_min'], 100)
+        price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000, strategy: 'min' }),
+        // ★ 2026-09-19：补 name/img（此前未定义 → 这两类端点进来的商品「未采集到名称」且无主图）
+        name: ['name', 'title'], img: IMG_PATHS
       },
       'recommend': {
         id: ['itemid', 'item_id'], shopid: ['shopid', 'shop_id'],
         month: [k('sold'), icsc('month')],
         total: [k('historical_sold'), k('sold_total'), k('total_sold'), k('sold')],
-        price: price(['price', 'price_min'], 100)
+        price: price(['price', 'price_min'], 100, { keys: ['item_data.item_card_display_price.price'], unit: 100000, strategy: 'min' }),
+        name: ['name', 'title'], img: IMG_PATHS
       },
       'seller.*': { // 卖家中心：裸 sold = 累计，仅 30d 语义字段当月销
         id: ['itemid', 'item_id'], shopid: ['shopid', 'shop_id'],
@@ -154,7 +157,7 @@
         total: [k('historical_sold'), k('sold_total'), k('sold')],
         // ★ 2026-09-17：补 name/img（同 rcmd_items）
         name: ['name', 'title'],
-        img: ['image', 'image_info.image_url', 'image_url', 'thumb_url'],
+        img: IMG_PATHS,  // ★ 2026-09-19：含 images（静态主图），排除视频封面（见 pickImg）
         price: price(['price', 'price_min'], 100)
       }
     }
@@ -168,6 +171,67 @@
   // 价格区间上限（2026-09-10 新增）：虾皮对「多规格」商品用 price_max 表示最高价。
   // 换算单位与 price 共用同一 unit，避免「下限除过、上限没除」的错位。
   var PRICE_MAX_KEYS = ['price_max', 'item_data.item_card_display_price.price_max'];
+
+  // ★ 2026-09-19【问题1 主图采集错误】：虾皮「视频商品」在列表/店铺卡片接口里返回的主图字段
+  //   其实是【视频封面】—— URL 以 _cover 结尾（实测 tw-xxx_cover 返回 200、去掉后缀则 404）。
+  //   直接当主图会让网站显示成「视频首页」（线上 48 件里 12 件、历史 1023 件里 59 件命中）。
+  //   解法：候选池按「非 _cover 优先」挑选（静态主图常在 images / image_info 里）；
+  //   若全是封面则退回第一张（有图胜过无图），并置 imgIsCover=true 交上游触发详情页精修覆盖。
+  var VIDEO_COVER_RE = /_cover(?:@|[?]|$)/i;
+  function isVideoCover(u) {
+    return u != null && u !== '' && VIDEO_COVER_RE.test(String(u));
+  }
+  // 统一图片候选路径。★ 去掉 thumb_url：它就是视频缩略图字段，是「视频首页」的来源之一。
+  var IMG_PATHS = ['images', 'image', 'image_info.image_url', 'image_url'];
+  function pickImg(it, paths) {
+    var cands = [];
+    function push(v) {
+      if (v == null) return;
+      if (Array.isArray(v)) { for (var n = 0; n < v.length && n < 8; n++) push(v[n]); return; }
+      if (typeof v !== 'string') return;
+      var t = v.trim();
+      if (t && cands.indexOf(t) < 0) cands.push(t);
+    }
+    var ps = paths || [];
+    for (var i = 0; i < ps.length; i++) push(deepGet(it, ps[i]));
+    if (!cands.length) return null;
+    for (var j = 0; j < cands.length; j++) { if (!isVideoCover(cands[j])) return cands[j]; }
+    return cands[0];
+  }
+  // 深搜版挑图：主路径取不到（或只取到视频封面）时用。
+  // 与 findTextDeep 同口径排除 shop/brand/items 容器（防店铺 logo 冒充商品主图），
+  // 但额外支持 images 数组，并且【优先返回非视频封面】的那一张。
+  function pickImgDeep(it, keys) {
+    var found = [];
+    function walk(obj, depth) {
+      if (depth > 6 || !obj || typeof obj !== 'object') return;
+      if (Array.isArray(obj)) { for (var i = 0; i < obj.length && i < 8; i++) walk(obj[i], depth); return; }
+      for (var kk in obj) {
+        if (!obj.hasOwnProperty(kk)) continue;
+        if (TEXT_SKIP.indexOf(kk) >= 0) continue;
+        if (keys.indexOf(kk) >= 0) {
+          var v = obj[kk];
+          if (Array.isArray(v)) {
+            for (var n = 0; n < v.length && n < 4; n++) {
+              if (typeof v[n] === 'string' && v[n] && found.indexOf(v[n]) < 0) found.push(v[n]);
+            }
+          } else if (typeof v === 'string' && v.length > 0 && v.length <= 400 && found.indexOf(v) < 0) {
+            found.push(v);
+          }
+        }
+      }
+      for (var k2 in obj) {
+        if (!obj.hasOwnProperty(k2)) continue;
+        if (TEXT_SKIP.indexOf(k2) >= 0) continue;
+        var v2 = obj[k2];
+        if (v2 && typeof v2 === 'object') walk(v2, depth + 1);
+      }
+    }
+    walk(it, 0);
+    if (!found.length) return null;
+    for (var j = 0; j < found.length; j++) { if (!isVideoCover(found[j])) return found[j]; }
+    return found[0];
+  }
 
   function coerceIntLocal(v) {
     if (v == null) return null;
@@ -426,12 +490,20 @@
     if (name == null) name = findTextDeep(it, ['name', 'title']);
     // ★ 2026-09-19：规格词（款式/顏色/尺寸…）不是商品名，视为缺失（宁可留空走体检条重录）
     if (isSpecName(name)) name = null;
-    var img = firstDeep(it, ep.img || []);
-    if (img == null) img = findTextDeep(it, ['image', 'thumb_url']);
+    // ★ 2026-09-19：走 pickImg（非视频封面优先）；主路径落空、或只拿到视频封面时，
+    //   再走深搜兜底换真图（深搜同样排除 thumb_url 与 shop/brand 容器）。
+    var img = pickImg(it, ep.img || []);
+    if (img == null || isVideoCover(img)) {
+      var _deepImg = pickImgDeep(it, ['images', 'image', 'image_url']);
+      if (_deepImg && (!isVideoCover(_deepImg) || img == null)) img = _deepImg;
+    }
     return {
       itemid: String(id), shopid: String(sid),
       month: month, total: total, week: week,
-      price: priceVal, priceMax: priceMaxVal, name: name, img: img,
+      price: priceVal,
+      // ★ tri-state 约定：无区间 = null（不是 undefined），与 month/total 同口径，下游 === null 判断可靠
+      priceMax: (priceMaxVal == null ? null : priceMaxVal), name: name, img: img,
+      imgIsCover: isVideoCover(img),   // ★ 上游据此触发详情页精修，用真主图覆盖
       ctime: (ctime != null && ctime > 0) ? ctime : null
     };
   }
@@ -464,7 +536,11 @@
     resolveItem: resolveItem,
     matchEndpoint: matchEndpoint,
     coerceIntLocal: coerceIntLocal,
-    parseNumLocal: parseNumLocal
+    parseNumLocal: parseNumLocal,
+    isVideoCover: isVideoCover,
+    pickImg: pickImg,
+    pickImgDeep: pickImgDeep,
+    IMG_PATHS: IMG_PATHS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.__SR_SCHEMA__ = api;

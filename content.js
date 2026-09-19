@@ -30,6 +30,11 @@
   var capturedUrlLog = [];   // 捕获到商品数据的接口请求 URL（诊断用）
   var lastShopDiag = null;  // ★ 诊断：inject.js 发来的店铺/推荐卡原始样本 + 逐件解析结果
   var pendingCount = 0;      // 浮窗：后台待同步计数
+  // ★ 2026-09-19【问题2 价格未采集】：因「无有效售价」被拒绝入站的商品。
+  //   网站端「价格未采集」的红字全部来自放行的无价商品 —— 这里直接不录。
+  //   但绝不静默：计数在浮窗可见，控制台打日志。
+  var skipNoPriceSet = {};
+  var skipNoPriceN = 0;
   var recordingOn = true;
   var floatEl = null;
   var injectVersion = '';    // inject.js 版本号（用于确认扩展是否加载新代码）
@@ -198,7 +203,9 @@
         var el = els[i];
         if (el.children && el.children.length) continue;
         var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
-        var mm = t.match(/^\$\s*([\d,]+)(?:\s*[~\u2013\u2014-]\s*\$\s*([\d,]+))?$/);
+        // ★ 2026-09-19【问题4 区间价】原正则只认裸 $，而虾皮台湾页面显示的是 NT$199，
+        //   导致 priceFromLeaf 在真实页面上恒返回 null（区间永远采不到）。补 NT$ 前缀与小数。
+        var mm = t.match(/^(?:NT)?\$\s*([\d,]+(?:\.\d+)?)(?:\s*[~\u2013\u2014-]\s*(?:NT)?\$\s*([\d,]+(?:\.\d+)?))?$/);
         if (!mm) continue;
         var lo = parseNum(mm[1]);
         if (lo == null || lo <= 0) continue;
@@ -293,6 +300,57 @@
     m = href.match(/\/product\/(\d+)\/(\d+)/i);
     if (m) return { shopid: m[1], itemid: m[2] };
     return null;
+  }
+
+  // ★ 2026-09-19【问题1 主图 / 问题4 区间价】按 itemid 找当前页面里对应的商品卡片元素。
+  //   用途：① 从卡片 img 里挑静态主图（避开视频封面 _cover）；
+  //        ② 从卡片价格叶子读「$低 - $高」区间 —— 完全免费，不发任何请求。
+  function findCardByItemId(itemid) {
+    try {
+      if (!itemid) return null;
+      var links = document.querySelectorAll('a[href*="' + itemid + '"]');
+      for (var i = 0; i < links.length && i < 12; i++) {
+        var a = links[i];
+        var href = a.href || a.getAttribute('href') || '';
+        var si = parseShopItem(href);
+        if (!si || String(si.itemid) !== String(itemid)) continue;
+        var card = a.closest ? a.closest('[data-sqe="item"], .shopee-search-item-result__item, .shop-search-result-item') : null;
+        if (card) return card;
+        var p = a.parentElement, steps = 0;
+        while (p && steps < 8) {
+          if (p.querySelector && p.querySelector('img')) {
+            var pt = p.textContent || '';
+            if (/\$/.test(pt) && pt.length > 12) return p;
+          }
+          p = p.parentElement; steps++;
+        }
+        return a;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  // 从卡片里挑「非视频封面」的图片。全部都是封面时返回该封面（有图胜过无图），
+  // 由上游打 imgIsCover 标记、交详情页精修补真主图。
+  function bestImgFromCard(card) {
+    try {
+      if (!card || !card.querySelectorAll) return '';
+      var imgs = card.querySelectorAll('img, source[srcset]');
+      var fallback = '';
+      for (var i = 0; i < imgs.length; i++) {
+        var el = imgs[i];
+        var ss = el.getAttribute && el.getAttribute('srcset');
+        var src = (el.getAttribute && (el.getAttribute('data-src') || el.getAttribute('data-original'))) ||
+                  (ss ? ss.split(',')[0].trim().split(/\s+/)[0] : '') ||
+                  (el.getAttribute && el.getAttribute('src')) || el.currentSrc || '';
+        if (!src || /^data:/.test(src)) continue;
+        if (src.indexOf('http') !== 0 && src.indexOf('//') === 0) src = 'https:' + src;
+        if (src.indexOf('susercontent') < 0) continue;
+        if (!S.isVideoCover(src)) return src;
+        if (!fallback) fallback = src;
+      }
+      return fallback;
+    } catch (e) { return ''; }
   }
 
   function pageTag() {
@@ -681,9 +739,10 @@
     var itemid = Number(si.itemid);
     if (!shopid || !itemid) return null;
 
+    // ★ 2026-09-19【问题1 主图采集错误】优先从容器挑「非视频封面」的图，回退到首个 img
     var imgEl = a.querySelector('img') || (container && container.querySelector ? container.querySelector('img') : null);
-    var imgSrc = '';
-    if (imgEl) {
+    var imgSrc = bestImgFromCard(container) || bestImgFromCard(a) || '';
+    if (!imgSrc && imgEl) {
       imgSrc = imgEl.getAttribute('data-src') || imgEl.getAttribute('data-original') || imgEl.src || imgEl.currentSrc || '';
     }
     if (imgSrc && imgSrc.indexOf('http') !== 0 && imgSrc.indexOf('//') === 0) imgSrc = 'https:' + imgSrc;
@@ -807,8 +866,9 @@
         var price = _lp ? _lp.price : (_rp ? _rp.price : undefined);
         var priceMax = _lp ? _lp.price_max : (_rp ? _rp.price_max : null);
         var imgEl = card.querySelector('img,source[srcset]') || a.querySelector('img,source[srcset]');
-        var imgSrc = '';
-        if (imgEl) {
+        // ★ 2026-09-19【问题1】优先挑「非视频封面」的图；全是封面时退回首个（由详情页精修补真主图）
+        var imgSrc = bestImgFromCard(card) || '';
+        if (!imgSrc && imgEl) {
           var _ss = imgEl.getAttribute('srcset');
           imgSrc = imgEl.getAttribute('data-src') || imgEl.getAttribute('data-original') ||
                    (_ss ? _ss.split(',')[0].trim().split(/\s+/)[0] : '') ||
@@ -1117,7 +1177,7 @@
             shop: item.shop_name || item.shopname || (item.shop && (item.shop.name || item.shop.shop_name)) || null,
             loc: item.shop_location || item.location || (item.shop && item.shop.shop_location) || null,
             name: item.name || item.title || null,
-            img: item.image || (item.images && item.images[0]) || null,
+            img: S.pickImg(item, S.IMG_PATHS) || null,   // ★ 2026-09-19：候选池含 images，排除视频封面
           };
           log('API 取数[' + src + ']', itemid, '月=' + detail.month_sold, '总=' + detail.total_sold,
               '价=' + detail.price, '(raw item.sold=' + item.sold + ', historical_sold=' + item.historical_sold + ')');
@@ -1336,8 +1396,17 @@
           log('店铺API录取[' + source + ']', iid, '月=' + sMonth, '总=' + sTotal, '价=' + it.price, '店=' + sid);
           var sName = it.name || '';
           var sImg = it.img || '';
-          if (Array.isArray(sImg)) sImg = sImg[0];
+          if (Array.isArray(sImg)) sImg = S.pickImg({ images: sImg }, ['images']) || sImg[0] || '';
           if (sImg) sImg = /^https?:/.test(sImg) ? sImg : ('https://down-tw.img.susercontent.com/file/' + sImg);
+          // ★ 2026-09-19【问题1 主图采集错误】接口给的主图若是【视频封面】（URL 以 _cover 结尾），
+          //   改从当前页面的商品卡片里挑静态主图；挑不到则标记 img_is_cover，交详情页精修覆盖。
+          var sCover = (it.imgIsCover === true) || S.isVideoCover(sImg);
+          var _fixCard = null;
+          if (sCover || !sImg) {
+            _fixCard = findCardByItemId(iid);
+            var _domImg = _fixCard ? bestImgFromCard(_fixCard) : '';
+            if (_domImg && !S.isVideoCover(_domImg)) { sImg = _domImg; sCover = false; }
+          }
           var sLoc = pickValue(it, ['shop_location', 'location', 'shop_loc', 'shoplocation']);
           var sprod = {
             id: sid + '-' + iid, shopid: sid, itemid: iid,
@@ -1354,6 +1423,24 @@
           }
           if (sName) sprod.name = String(sName);
           if (sImg) sprod.img = sImg;
+          if (sCover) sprod.img_is_cover = true;   // 待详情页精修替换真主图
+          // ★ 2026-09-19【问题4 价格区间】接口未给 price_max（或没给价）时，
+          //   用当前页面商品卡片上的「$低 - $高」补齐 —— 完全免费，不发任何请求。
+          if (sprod.price_max == null || !(Number(sprod.price) > 0)) {
+            if (!_fixCard) _fixCard = findCardByItemId(iid);
+            if (_fixCard) {
+              var _rng = priceFromLeaf(_fixCard);
+              // priceFromLeaf 只认「纯价格叶子」；拿不到区间时退回整卡文本（支持 NT$199 - NT$399）
+              if (!_rng || !_rng.price_max) {
+                var _rng2 = extractPriceRangeFromDOMText(joinTextSpaced(_fixCard));
+                if (_rng2 && (!_rng || (_rng2.price_max && !_rng.price_max))) _rng = _rng2;
+              }
+              if (_rng) {
+                if (!(Number(sprod.price) > 0) && _rng.price > 0) sprod.price = _rng.price;
+                if (_rng.price_max && _rng.price_max > Number(sprod.price || 0)) sprod.price_max = _rng.price_max;
+              }
+            }
+          }
           if (sLoc && typeof sLoc === 'string') sprod.loc = sLoc;
           // ★ 2026-09-17：上架时间（ctime，unix 秒）→ listed_at。网站据此显示「上架 N 天」。
           var _ct = Number(it.ctime);
@@ -1386,8 +1473,8 @@
         // ★ 2026-08-20：从嵌套 item_basic / item 子对象提取名称/图片/店铺/产地/评分/点赞/库存
         var name = pickValue(it, ['name', 'title']);
         if (name) rec.name = String(name);
-        var img = pickValue(it, ['image_url', 'image', 'images']);
-        if (Array.isArray(img)) img = img[0];
+        // ★ 2026-09-19【问题1】统一走 S.pickImg：候选池含 images，排除视频封面（_cover）
+        var img = S.pickImg(it, S.IMG_PATHS);
         if (img) rec.img = /^https?:/.test(img) ? img : ('https://down-tw.img.susercontent.com/file/' + img);
         var shopRaw = pickValue(it, ['shop_name', 'shopname', 'shop']);
         if (shopRaw) {
@@ -1536,15 +1623,35 @@
   function sendProduct(prod, tag, isUpdate) {
     if (!prod || !prod.itemid || !prod.shopid) return;
     var key = prod.shopid + '-' + prod.itemid;
-    sentMonth[key] = Number(prod.month_sold) || 0;
-    sentKeyAll[key] = 1;
     if (!isUpdate) {
       if (sentKeys[key]) return;
       // 若有页面接口已捕获到真实销量，先合并进本次发送，避免先发的 0 值覆盖后续真实值
       prod = applyCapture(prod);
+      // ★ 2026-09-19【问题2 价格未采集·质量闸门】无有效售价的商品一律不入站。
+      //   网站那张卡片无价时只能显示「价格未采集」红字（用户明确要求杜绝）。
+      //   无价商品对选品判断也没有价值，宁可不录；精修补到价后会再次走到这里正常入站。
+      //   放在 applyCapture 之后判断 —— 接口已捕获的价格会先合并进来，避免误拦。
+      if (!(Number(prod.price) > 0)) {
+        if (!skipNoPriceSet[key]) {
+          skipNoPriceSet[key] = 1; skipNoPriceN++;
+          log('跳过(无有效价格)不入站', key, '来源=' + (tag || '?'), '名=' + (prod.name || '(无)'));
+        }
+        updateFloat();
+        return;
+      }
       sentKeys[key] = true;
       sessionCount++;
+    } else if (!(Number(prod.price) > 0) && !sentKeyAll[key]) {
+      // 精修更新路径：若该商品此前从未成功入站、本次仍无价格 → 同样拦（否则可绕过闸门）
+      if (!skipNoPriceSet[key]) {
+        skipNoPriceSet[key] = 1; skipNoPriceN++;
+        log('跳过(无有效价格·精修后)不入站', key, '来源=' + (tag || '?'));
+      }
+      updateFloat();
+      return;
     }
+    sentMonth[key] = Number(prod.month_sold) || 0;
+    sentKeyAll[key] = 1;
     // ★ 「录完这一页」计数：无条件记账（不受 isUpdate 影响），
     //   同一件只算一次，并且月销取最大值（后续 API 捕获到真实值时会补上）。
     if (pageRecTally) {
@@ -1670,6 +1777,7 @@
       '  <div class="sr-row">待同步：<b id="sr-pending">0</b> 件</div>',
       '  <div class="sr-row"><label style="cursor:pointer;user-select:none"><input type="checkbox" id="sr-browse" checked> 🌐 浏览即录（无需点进商品）</label></div>',
       '  <div class="sr-row">浏览已扫：<b id="sr-browse-n">0</b> 件（含月销 <b id="sr-browse-m">0</b>）</div>',
+      '  <div class="sr-row" id="sr-skip-row" style="display:none;color:#ff8a80;">⚠ 跳过（无价格）：<b id="sr-skip">0</b> 件</div>',
       '  <div class="sr-row">API捕获：<b id="sr-api">0</b> 件</div>',
       '  <button class="sr-sync" id="sr-sync">⚡ 立即同步</button>',
       '  <button class="sr-clear" id="sr-clear">🗑 清空待同步</button>',
@@ -1748,6 +1856,8 @@
     var a = floatEl.querySelector('#sr-api'); if (a) a.textContent = apiCaptureCount;
     var bn = floatEl.querySelector('#sr-browse-n'); if (bn) bn.textContent = browseCount;
     var bm = floatEl.querySelector('#sr-browse-m'); if (bm) bm.textContent = browseMonthCount;
+    var sk = floatEl.querySelector('#sr-skip'); if (sk) sk.textContent = skipNoPriceN;
+    var skr = floatEl.querySelector('#sr-skip-row'); if (skr) skr.style.display = skipNoPriceN > 0 ? '' : 'none';
     var bc = floatEl.querySelector('#sr-browse'); if (bc && bc.checked !== browseCapture) bc.checked = browseCapture;
     var title = floatEl.querySelector('.sr-title');
     if (title) title.textContent = recordingOn ? '虾皮录制中' : '录制已暂停';
