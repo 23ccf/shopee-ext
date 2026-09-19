@@ -169,16 +169,9 @@
     } catch (e) { return (root && root.textContent) || ''; }
   }
 
-  // ★ 2026-09-19：命中数字紧邻「折」时，尾部必黏着折扣数字（textContent 黏连产物）：
-  //   "$448"+"3.5折" → "4483.5"（剥 3 位）→ 448；"$448"+"8折" → "4488"（剥 1 位）→ 448。
-  function stripDiscountTail(numStr, after) {
-    var s = String(numStr || '');
-    if (!/^\s*折/.test(String(after || ''))) return s;
-    s = s.replace(/,/g, '');
-    if (/\.\d$/.test(s) && s.length > 4) return s.slice(0, -3);
-    if (s.length > 3) return s.slice(0, -1);
-    return s;
-  }
+  // ★ 2026-09-19b：价格采集彻底简化 —— 只录「虾皮页面显示的价格」，【不解析任何折扣】。
+  //   折扣「N.N折 / N折」不含 $ 符号，正则 /\$\s*[\d,]+/ 天然不会命中它，故无需剥离逻辑。
+  //   价格与折扣是相邻元素，joinTextSpaced 已用空格恢复边界，$448 与 3.5折 不会黏成 $4483.5。
 
   // ★ 2026-09-19：清洗名称里黏着的「价格/折扣/销量」token —— textContent 把相邻元素
   //   拼成「…人體工學枕$4483.5折」「…清潔片$00折」「…枕 月銷量1000+」，直接当名称入库。
@@ -216,51 +209,52 @@
     return null;
   }
 
-  // ---- 从详情页 DOM 文本提取商品真实售价 ----
-  // 虾皮详情页常见文案：$199 $299 6.7折 賣場優惠券 現折$10 現折$20 6期x $33 運費：$0 起
-  // 关键观察：商品真实售价通常**没有上下文关键词**，是个孤立的 $XX；而优惠券/运费/分期
-  // 一定紧跟「折/現折/運費/優惠/分期/利率/折扣」这些关键词。
-  // 策略：先用宽正则收集所有 $XX 类数字，再按下述三步过滤：
-  //   ① 排除紧邻关键词(折/優惠券/運費/分期/利率/折扣/0利率)附近的数字；
-  //   ② 排除明显是运费/优惠券/分期价的 <50 的小数；
-  //   ③ 取页面文本位置最早、且满足[50, 999999] 的合理价格（真实售价通常在前）。
-  function extractPriceFromDOMText(text) {
-    if (!text) return undefined;
-    // 把所有 "$数字" 命中点按位置收录，并标记每个位置上方 12 字符内是否含【否定关键词】
-    var re = /\$\s*([\d,]+(?:\.\d+)?)(?!\d)/g;
-    var KEYWORD_BEFORE = /(?:現\s*折|折\s*\$|賣[場场]\s*優?[惠券]|優?[惠券]|運\s*費|运\s*费|分\s*期|利\s*率|0\s*利率|折\s*[扣]|满\s*[减]|滿\s*[减]|減\s*免|coupon|dicount)/i;
-    var candidates = [];
+  // ---- 从页面可见文本提取「显示价 + 链接内最高价」 ----
+  // 虾皮页面显示的价格就是最终售价（已是折扣后的实卖价）。折扣「N.N折 / N折」不含 $ 符号，
+  // 正则 /\$\s*[\d,]+/ 天然不会命中它 —— 因此【完全不需要解析折扣】，只取页面显示的 $数字。
+  // 多规格商品页面显示「$10 - $100」（低价=页面显示价、高价=链接内最高规格价），一并返回区间；
+  // 单一价格商品只返回低价、price_max=null。
+  // 文本由 joinTextSpaced 提供（元素间已加空格），「$448」与「3.5折」不会黏成 $4483.5。
+  // 唯一护栏：紧邻「現折/優惠券/運費/分期/利率」的 $数字（如 現折$10）是优惠/运费，不是售价，跳过。
+  function extractPriceRangeFromDOMText(text) {
+    if (!text) return null;
+    var FEE_BEFORE = /(?:現\s*折|優?\s*惠\s*券|運\s*費|运\s*费|分\s*期|利\s*率|折\s*[扣]|滿?\s*[减]|減\s*免)/;
+    function skip(idx) { return FEE_BEFORE.test(text.slice(Math.max(0, idx - 8), idx)); }
     var m;
+    // 1) NT$ 区间（NT$ 更特异，先于裸 $ 判断，避免「NT$50」里的 $50 被误当单一价）
+    var rr2 = /NT\$\s*([\d,]{2,}(?:\.\d+)?)\s*(?:-|~|–|—)\s*NT\$\s*([\d,]{2,}(?:\.\d+)?)/g;
+    while ((m = rr2.exec(text)) != null) {
+      if (skip(m.index)) continue;
+      var lo3 = parseNum(m[1]), hi3 = parseNum(m[2]);
+      if (lo3 != null && hi3 != null && lo3 >= 1 && hi3 > lo3) return { price: lo3, price_max: hi3 };
+    }
+    // 2) $ 区间 "$10 - $100" / "$10 ~ $100" / "$10-$100"
+    var rr = /\$\s*([\d,]{2,}(?:\.\d+)?)\s*(?:-|~|–|—)\s*\$?\s*([\d,]{2,}(?:\.\d+)?)/g;
+    while ((m = rr.exec(text)) != null) {
+      if (skip(m.index)) continue;
+      var lo = parseNum(m[1]), hi = parseNum(m[2]);
+      if (lo != null && hi != null && lo >= 1 && hi > lo) return { price: lo, price_max: hi };
+    }
+    // 3) NT$ 单一价格
+    var re2 = /NT\$\s*([\d,]{2,}(?:\.\d+)?)/g;
+    while ((m = re2.exec(text)) != null) {
+      if (skip(m.index)) continue;
+      var lo4 = parseNum(m[1]);
+      if (lo4 != null && lo4 >= 1) return { price: lo4, price_max: null };
+    }
+    // 4) $ 单一价格
+    var re = /\$\s*([\d,]{2,}(?:\.\d+)?)/g;
     while ((m = re.exec(text)) != null) {
-      var p = parseNum(stripDiscountTail(m[1], text.slice(re.lastIndex)));
-      if (p == null || p <= 0) continue;
-      // 检查这个数字上方 12 字符内是否含「否定关键词」（折/優惠/運費/分期/利率），命中则视为非售价
-      var ctx = text.slice(Math.max(0, m.index - 12), m.index);
-      if (KEYWORD_BEFORE.test(ctx)) continue;
-      candidates.push({ p: p, idx: m.index });
+      if (skip(m.index)) continue;
+      var lo2 = parseNum(m[1]);
+      if (lo2 != null && lo2 >= 1) return { price: lo2, price_max: null };
     }
-    if (!candidates.length) {
-      // 退到 NT$ 类，与上面同样过滤
-      var re2 = /NT\$\s*([\d,]+(?:\.\d+)?)/g;
-      while ((m = re2.exec(text)) != null) {
-        var p2 = parseNum(stripDiscountTail(m[1], text.slice(re2.lastIndex)));
-        if (p2 == null || p2 <= 0) continue;
-        var ctx2 = text.slice(Math.max(0, m.index - 12), m.index);
-        if (KEYWORD_BEFORE.test(ctx2)) continue;
-        candidates.push({ p: p2, idx: m.index });
-      }
-    }
-    if (!candidates.length) return undefined;
-    // 按出现位置排序；真实售价最早出现（页面顶部主图区），且通常 >=50
-    candidates.sort(function (a, b) { return a.idx - b.idx; });
-    for (var i = 0; i < candidates.length; i++) {
-      if (candidates[i].p >= 50 && candidates[i].p <= 999999) return normalizePrice(candidates[i].p);
-    }
-    // 没找到 ≥50 的合理价：返回第一个候选，但**绝不返回 <10**（避免运费/分期 $0 / $5）
-    for (var j = 0; j < candidates.length; j++) {
-      if (candidates[j].p >= 10) return normalizePrice(candidates[j].p);
-    }
-    return undefined;
+    return null;
+  }
+  // 兼容旧调用：只取低价（详情页等单一价格场景）
+  function extractPriceFromDOMText(text) {
+    var r = extractPriceRangeFromDOMText(text);
+    return r ? r.price : undefined;
   }
 
   // ---- 从详情页 DOM 提取主图 ----
@@ -374,6 +368,7 @@
       rating: rating,
       liked: liked,
       price: (r.price == null) ? undefined : r.price,
+      price_max: (r.priceMax != null && r.price != null && r.priceMax > r.price) ? r.priceMax : undefined,
       img: imgUrl(r.img),
       name: r.name || null,
       shop: shop,
@@ -411,7 +406,8 @@
     var name = null;
     try { var h1 = document.querySelector('h1'); if (h1 && h1.innerText) name = h1.innerText.trim(); } catch (e) {}
     if (!name) { name = (document.title || '').replace(/\s*[-|].*$/, '').trim(); }
-    var price = extractPriceFromDOMText(text);
+    var priceRange = extractPriceRangeFromDOMText(text);
+    var price = priceRange ? priceRange.price : undefined;
     if (!sales.month_sold && !sales.total_sold && !price) return false; // 还没数据，等下次
     seenIds[key] = true;
     var prod = {
@@ -419,6 +415,7 @@
       itemid: ids.itemid, shopid: ids.shopid,
       name: name || undefined,
       price: price,
+      price_max: (priceRange && priceRange.price_max) || undefined,
       img: undefined,
       sold: sales.month_sold || 0,
       sold_total: sales.total_sold || 0,
@@ -479,6 +476,7 @@
       shopid: found.shopid,
       name: found.name,
       price: found.price,
+      price_max: found.price_max,
       img: found.img,
       sold: found.month_sold || 0,
       sold_total: found.total_sold || 0,
@@ -529,12 +527,16 @@
     var domName = null;
     try { var h1 = document.querySelector('h1'); if (h1 && h1.innerText) domName = h1.innerText.trim(); } catch (e) {}
     if (!domName) domName = (document.title || '').replace(/\s*[-|].*$/, '').trim();
-    var domPrice = extractPriceFromDOMText(text);
+    var domRange = extractPriceRangeFromDOMText(text);
+    var domPrice = domRange ? domRange.price : undefined;
     var domImg = extractMainImageFromDOM();
 
     // 3) 合并：销量优先 DOM（真实可见）；元数据优先 SSR（完整）；都没有再回退到 DOM
     var name = (domName && domName.length > 2) ? domName : (ssrItem && ssrItem.name) || domName || undefined;
     var price = domPrice || (ssrItem && ssrItem.price) || undefined;
+    // ★ 2026-09-19c：区间上限 = SSR 的 price_max 优先，否则回退到 DOM 文本里的「$低 - $高」
+    var priceMax = (ssrItem && ssrItem.price_max) || (domRange && domRange.price_max) || undefined;
+    if (!(priceMax > price)) priceMax = undefined;
     var img = (ssrItem && ssrItem.img) || domImg || undefined;
     var monthSold = (domSales.month_sold > 0 ? domSales.month_sold : null) || (ssrItem && ssrItem.month_sold) || 0;
     var totalSold = (domSales.total_sold > 0 ? domSales.total_sold : null) || (ssrItem && ssrItem.total_sold) || 0;
@@ -544,7 +546,7 @@
     seenIds[key] = true;
     var prod = {
       id: key, itemid: ids.itemid, shopid: ids.shopid,
-      name: name, price: price, img: img,
+      name: name, price: price, price_max: priceMax, img: img,
       sold: monthSold, sold_total: totalSold, total_sold: totalSold,
       month_sold: monthSold, week_sold: monthSold > 0 ? Math.round(monthSold / 4.345) : 0,
       month_sold_estimated: false,
@@ -694,8 +696,8 @@
     }
     if (!name) name = (a.textContent || '').trim().slice(0, 150);
 
-    // 卡片文字中的价格和销量兜底
-    var text = ((container && container.textContent) || '') + ' ' + (a.textContent || '');
+    // 卡片文字中的价格和销量兜底（joinTextSpaced：元素间加空格，避免折扣黏连成 $4483.5）
+    var text = joinTextSpaced(container) + ' ' + joinTextSpaced(a) + ' ' + ((a.getAttribute && a.getAttribute('title')) || '');
     var price = extractPriceFromDOMText(text);
     var totalSold = 0, monthSold = 0, monthSoldEstimated = false;
     // ★ 列表/搜索/店铺商品卡：「已售出 X」= 累计总销（与详情页一致，已验证），绝不当月销；
@@ -798,11 +800,12 @@
         // 店铺页 DOM 兜底：月销>0 或 总销>0 即保留（与 API 路径一致），不再一刀切 >30
         if (monthSold <= 0 && totalSold <= 0) continue;
         found++;
-        // ★ 2026-09-19：优先取「纯价格叶子元素」($448 / $179 - $355)，完全避开折扣黏连；
-        //   取不到再退回整卡文本解析（内部已有折扣黏连剥离）。
+        // ★ 2026-09-19b：优先取「纯价格叶子元素」($448 / $179 - $355)，完全避开折扣黏连；
+        //   取不到再退回整卡文本取第一个 $价格（折扣不含 $，天然被忽略，无需任何解析）。
         var _lp = priceFromLeaf(card);
-        var price = _lp ? _lp.price : extractPriceFromDOMText(text);
-        var priceMax = (_lp && _lp.price_max) ? _lp.price_max : null;
+        var _rp = _lp ? null : extractPriceRangeFromDOMText(text);
+        var price = _lp ? _lp.price : (_rp ? _rp.price : undefined);
+        var priceMax = _lp ? _lp.price_max : (_rp ? _rp.price_max : null);
         var imgEl = card.querySelector('img,source[srcset]') || a.querySelector('img,source[srcset]');
         var imgSrc = '';
         if (imgEl) {
