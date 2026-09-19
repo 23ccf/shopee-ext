@@ -156,6 +156,66 @@
     return res;
   }
 
+  // ★ 2026-09-19：textContent 会把相邻元素文本无边界拼接（"$448" + "3.5折" → "$4483.5折"），
+  //   用 TreeWalker 逐文本节点聚合、节点间强制加空格，恢复自然边界。
+  function joinTextSpaced(root) {
+    try {
+      if (!root) return '';
+      if (typeof document === 'undefined' || !document.createTreeWalker) return root.textContent || '';
+      var w = document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, null, false);
+      var out = [], n;
+      while ((n = w.nextNode())) { var t = (n.nodeValue || '').trim(); if (t) out.push(t); }
+      return out.join(' ');
+    } catch (e) { return (root && root.textContent) || ''; }
+  }
+
+  // ★ 2026-09-19：命中数字紧邻「折」时，尾部必黏着折扣数字（textContent 黏连产物）：
+  //   "$448"+"3.5折" → "4483.5"（剥 3 位）→ 448；"$448"+"8折" → "4488"（剥 1 位）→ 448。
+  function stripDiscountTail(numStr, after) {
+    var s = String(numStr || '');
+    if (!/^\s*折/.test(String(after || ''))) return s;
+    s = s.replace(/,/g, '');
+    if (/\.\d$/.test(s) && s.length > 4) return s.slice(0, -3);
+    if (s.length > 3) return s.slice(0, -1);
+    return s;
+  }
+
+  // ★ 2026-09-19：清洗名称里黏着的「价格/折扣/销量」token —— textContent 把相邻元素
+  //   拼成「…人體工學枕$4483.5折」「…清潔片$00折」「…枕 月銷量1000+」，直接当名称入库。
+  function cleanNameJunk(s) {
+    var t = String(s || '').replace(/\s+/g, ' ').trim();
+    for (var i = 0; i < 4; i++) {
+      var b = t;
+      t = t.replace(/\$\s*[\d,]+(?:\.\d+)?\s*折?/g, ' ')
+           .replace(/(?:月[銷销]量?|已售[出]?|近\s*30\s*天[售出]*|30\s*天[售出]*)\s*[\d,.]+\s*[kKw万萬]?\+?/g, ' ')
+           .replace(/\d(?:\.\d+)?折\s*$/, ' ')
+           .replace(/\s+/g, ' ').trim();
+      if (t === b) break;
+    }
+    return t;
+  }
+
+  // ★ 2026-09-19：优先从「纯价格叶子元素」取价 —— 元素文本只有 $N 或 $N - $M（多规格区间），
+  //   天然不含折扣黏连；返回 {price, price_max} 或 null（取不到由调用方退回整卡文本解析）。
+  function priceFromLeaf(container) {
+    try {
+      if (!container || !container.querySelectorAll) return null;
+      var els = container.querySelectorAll('*');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.children && el.children.length) continue;
+        var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        var mm = t.match(/^\$\s*([\d,]+)(?:\s*[~\u2013\u2014-]\s*\$\s*([\d,]+))?$/);
+        if (!mm) continue;
+        var lo = parseNum(mm[1]);
+        if (lo == null || lo < 10) continue;
+        var hi = mm[2] ? parseNum(mm[2]) : null;
+        return { price: lo, price_max: (hi != null && hi > lo) ? hi : null };
+      }
+    } catch (e) {}
+    return null;
+  }
+
   // ---- 从详情页 DOM 文本提取商品真实售价 ----
   // 虾皮详情页常见文案：$199 $299 6.7折 賣場優惠券 現折$10 現折$20 6期x $33 運費：$0 起
   // 关键观察：商品真实售价通常**没有上下文关键词**，是个孤立的 $XX；而优惠券/运费/分期
@@ -172,7 +232,7 @@
     var candidates = [];
     var m;
     while ((m = re.exec(text)) != null) {
-      var p = parseNum(m[1]);
+      var p = parseNum(stripDiscountTail(m[1], text.slice(re.lastIndex)));
       if (p == null || p <= 0) continue;
       // 检查这个数字上方 12 字符内是否含「否定关键词」（折/優惠/運費/分期/利率），命中则视为非售价
       var ctx = text.slice(Math.max(0, m.index - 12), m.index);
@@ -183,7 +243,7 @@
       // 退到 NT$ 类，与上面同样过滤
       var re2 = /NT\$\s*([\d,]+(?:\.\d+)?)/g;
       while ((m = re2.exec(text)) != null) {
-        var p2 = parseNum(m[1]);
+        var p2 = parseNum(stripDiscountTail(m[1], text.slice(re2.lastIndex)));
         if (p2 == null || p2 <= 0) continue;
         var ctx2 = text.slice(Math.max(0, m.index - 12), m.index);
         if (KEYWORD_BEFORE.test(ctx2)) continue;
@@ -724,7 +784,9 @@
         }
         if (!card) card = a;
         // 把卡片内所有文本聚合（包括价格、销量、名称）
-        var text = (card.textContent || '') + ' ' + (a.textContent || '') + ' ' + (a.getAttribute('title') || '');
+        // ★ 2026-09-19：改用 joinTextSpaced —— textContent 会把相邻元素 "$448"+"3.5折"
+        //   拼成 "$4483.5折"（无边界），价格/名称双双被污染（线上实测 4073.7、4483.5 等假价）。
+        var text = joinTextSpaced(card) + ' ' + joinTextSpaced(a) + ' ' + (a.getAttribute('title') || '');
         var smMonth = text.match(/月[銷销]量?\s*([\d,.]+[kKw万]?)/) ||
                       text.match(/近\s*30\s*天[售出]*\s*([\d,.]+[kKw万]?)/) ||
                       text.match(/30\s*天[售出]*\s*([\d,.]+[kKw万]?)/);
@@ -736,7 +798,11 @@
         // 店铺页 DOM 兜底：月销>0 或 总销>0 即保留（与 API 路径一致），不再一刀切 >30
         if (monthSold <= 0 && totalSold <= 0) continue;
         found++;
-        var price = extractPriceFromDOMText(text);
+        // ★ 2026-09-19：优先取「纯价格叶子元素」($448 / $179 - $355)，完全避开折扣黏连；
+        //   取不到再退回整卡文本解析（内部已有折扣黏连剥离）。
+        var _lp = priceFromLeaf(card);
+        var price = _lp ? _lp.price : extractPriceFromDOMText(text);
+        var priceMax = (_lp && _lp.price_max) ? _lp.price_max : null;
         var imgEl = card.querySelector('img,source[srcset]') || a.querySelector('img,source[srcset]');
         var imgSrc = '';
         if (imgEl) {
@@ -757,7 +823,10 @@
         // ★ 2026-09-18：再兜底 —— 从卡片叶子文本挑最长一条当名称（剔除销量/价格/按钮 token）。
         //   新版店铺页 <a> 只包图片、无 data-sqe 标记，旧逻辑 name 恒空 →「未采集到名称」。
         if (!name) name = pickNameFromCard(card);
-        if (!name) name = (a.textContent || '').trim().slice(0, 150);
+        if (!name) name = cleanNameJunk((a.textContent || '')).slice(0, 150);
+        // ★ 2026-09-19：任何来源的名称都过一遍黏连清洗（尾部 $N折 / 月銷量N / 已售N）
+        name = cleanNameJunk(name);
+        if (name && name.replace(/\s+/g, '').length < 2) name = '';
         // ★ 2026-09-19：规格词（款式/顏色/尺寸…）与超短文本不是商品名，宁可留空走体检条重录
         //   （线上实测 12 件 name=款式/顏色、无价格的脏卡）。
         if (name && /^(款式|顏色|颜色|尺寸|規格|规格|型號|型号|選項|选项|分類|分类|類別|类别)$/.test(name.replace(/\s+/g, ''))) name = '';
@@ -765,7 +834,7 @@
         seenIds[key] = true;
         var prod = {
           id: key, itemid: Number(si.itemid), shopid: Number(si.shopid),
-          name: name || undefined, price: price, img: imgSrc || undefined,
+          name: name || undefined, price: price, price_max: priceMax || undefined, img: imgSrc || undefined,
           sold: monthSold, month_sold: monthSold,
           week_sold: Math.round(monthSold / 4.345),
           total_sold: totalSold, sold_total: totalSold,
