@@ -193,6 +193,22 @@
     return t;
   }
 
+  // ★ 2026-09-21【根治「价格录成 10」】「2 折價 NT$10」这类优惠徽章的内层 NT$10 也是
+  //   「纯价格叶子」，且文档序排在主价之前，曾被 priceFromLeaf 抓走当商品价
+  //   （线上 20+ 件 price=10、页面实价 $367）。判定：叶子向上 5 层内、文本 <80 字的
+  //   小容器若含优惠词，即视为徽章内层，跳过。主价行不含这些词，不受影响。
+  var PROMO_BADGE_RE = /(折\s*[價价]|現\s*折|優?\s*惠\s*券|折\s*扣\s*券|回\s*饋|加\s*價|加\s*購|加\s*购|滿\s*[額额]|領\s*券|限\s*時\s*優\s*惠)/;
+  function inPromoBadge(el, root) {
+    var p = el, steps = 0;
+    while (p && p !== root && steps < 5) {
+      p = p.parentElement; steps++;
+      if (!p) break;
+      var tp = (p.textContent || '').trim();
+      if (tp.length > 80) return false;
+      if (PROMO_BADGE_RE.test(tp)) return true;
+    }
+    return false;
+  }
   // ★ 2026-09-19：优先从「纯价格叶子元素」取价 —— 元素文本只有 $N 或 $N - $M（多规格区间），
   //   天然不含折扣黏连；返回 {price, price_max} 或 null（取不到由调用方退回整卡文本解析）。
   function priceFromLeaf(container) {
@@ -207,6 +223,8 @@
         //   导致 priceFromLeaf 在真实页面上恒返回 null（区间永远采不到）。补 NT$ 前缀与小数。
         var mm = t.match(/^(?:NT)?\$\s*([\d,]+(?:\.\d+)?)(?:\s*[~\u2013\u2014-]\s*(?:NT)?\$\s*([\d,]+(?:\.\d+)?))?$/);
         if (!mm) continue;
+        // ★ 2026-09-21：优惠徽章内层（折價/現折/優惠券…）不是商品价，跳过
+        if (inPromoBadge(el, container)) continue;
         var lo = parseNum(mm[1]);
         if (lo == null || lo <= 0) continue;
         var hi = mm[2] ? parseNum(mm[2]) : null;
@@ -225,7 +243,7 @@
   // 唯一护栏：紧邻「現折/優惠券/運費/分期/利率」的 $数字（如 現折$10）是优惠/运费，不是售价，跳过。
   function extractPriceRangeFromDOMText(text) {
     if (!text) return null;
-    var FEE_BEFORE = /(?:現\s*折|優?\s*惠\s*券|運\s*費|运\s*费|分\s*期|利\s*率|折\s*[扣]|滿?\s*[减]|減\s*免)/;
+    var FEE_BEFORE = /(?:現\s*折|優?\s*惠\s*券|運\s*費|运\s*费|分\s*期|利\s*率|折\s*[扣]|折\s*[價价]|折\s*扣\s*券|回\s*饋|加\s*價|領\s*券|滿?\s*[减]|減\s*免)/;
     function skip(idx) { return FEE_BEFORE.test(text.slice(Math.max(0, idx - 8), idx)); }
     var m;
     // 1) NT$ 区间（NT$ 更特异，先于裸 $ 判断，避免「NT$50」里的 $50 被误当单一价）
@@ -1377,6 +1395,26 @@
           browseCount++;
           if (sMonth > 0) browseMonthCount++;
           updateFloat();
+          // ★ 2026-09-21【根治：页面明明显示「月銷量 N / $價」却录成 月销未知/价格10】
+          //   某些视图下接口 icsc 只有总销没有月销（月销→null→被隐藏）；display_price 可能给到
+          //   「2 折價 NT$10」这类优惠价。而卡片 DOM 上渲染着用户看到的真值 —— 入站前一律用
+          //   当前页卡片自愈（零请求、零风控）：月销/总销只补不降，价格以页面显示价为准。
+          var _healPrice = (it.price != null) ? Number(it.price) : null;
+          var _healCard = findCardByItemId(iid);
+          if (_healCard) {
+            var _healSales = extractSalesFromLiveDOM(joinTextSpaced(_healCard), 'card');
+            if (!(sMonth > 0) && _healSales.month_sold > 0) {
+              log('卡片DOM补月销', iid, sMonth, '→', _healSales.month_sold);
+              sMonth = _healSales.month_sold;
+              browseMonthCount++;
+            }
+            if (!(sTotal > 0) && _healSales.total_sold > 0) sTotal = _healSales.total_sold;
+            var _healP = priceFromLeaf(_healCard);
+            if (_healP && _healP.price > 0 && _healP.price !== _healPrice) {
+              log('卡片DOM校价', iid, 'API=' + _healPrice, '→ 页面显示价=' + _healP.price);
+              _healPrice = _healP.price;
+            }
+          }
           // ★ 来源感知阈值：
           //   - 店铺页(shop)：用户主动浏览该店，月销>0 或 总销>0 即保留（与 background 过滤一致），避免 109 件只进 16 件。
           //   - PDP 推荐卡(pdp_card)：「看了又看」跨店商品，只保留月销>30 的热销品，避免刷屏。
@@ -1416,9 +1454,9 @@
             shop_id: (payload.shopId || String(sid)),
             keep_shop: true
           };
-          if (it.price != null) sprod.price = Number(it.price);
+          if (_healPrice != null && _healPrice > 0) sprod.price = _healPrice;
           // ★ 价格区间上限（2026-09-10）：多规格商品才有，缺失就不写，网站按单一价格显示
-          if (it.price_max != null && Number(it.price_max) > Number(it.price || 0)) {
+          if (it.price_max != null && Number(it.price_max) > Number(_healPrice || 0)) {
             sprod.price_max = Number(it.price_max);
           }
           if (sName) sprod.name = String(sName);
