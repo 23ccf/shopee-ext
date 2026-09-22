@@ -925,6 +925,9 @@
           url: 'https://shopee.tw/product/' + si.shopid + '/' + si.itemid
         };
         log('店铺DOM兜底', si.itemid, '月=' + monthSold, '总=' + totalSold, '价=' + price);
+        // ★ 月销缺失（虾皮店铺页几乎不暴露月销文案）→ 入队，待「立即同步」时由 inject.js 拉
+        //   item/get 补全权威月销（顺带补价格/真主图），确保推到网站的是真实月销、门槛(≥30)正确放行。
+        if (monthSold <= 0) { try { scheduleBatchFetch(si.shopid, si.itemid, key); } catch (e) {} }
         sendProduct(prod, '店铺', true);
       }
       if (found > 0) updateFloat();
@@ -1690,7 +1693,7 @@
     }
     sentMonth[key] = Number(prod.month_sold) || 0;
     sentKeyAll[key] = 1;
-    // ★ 「录完这一页」计数：无条件记账（不受 isUpdate 影响），
+    // ★ 整店载入计数：无条件记账（不受 isUpdate 影响），
     //   同一件只算一次，并且月销取最大值（后续 API 捕获到真实值时会补上）。
     if (pageRecTally) {
       var _m = Number(prod.month_sold) || 0;
@@ -1774,6 +1777,24 @@
     next();
   }
 
+  // ★ 同步前一次性把补抓队列下发（inject.js 内部按约 0.4s/件温和节流），并等全部发完再 resolve，
+  //   让「立即同步」在推送前把月销缺失的商品补全真实月销（否则推 0 月销被网站门槛全隐藏）。
+  function flushBatchFetchAsync(maxItems, timeoutMs) {
+    return new Promise(function (resolve) {
+      if (!batchFetchQueue.length) { resolve({ flushed: 0 }); return; }
+      var limit = (typeof maxItems === 'number' && maxItems > 0) ? maxItems : BATCH_FETCH_LIMIT;
+      var chunk = [];
+      for (var i = 0; i < limit && batchFetchQueue.length; i++) chunk.push(batchFetchQueue.shift());
+      var n = chunk.length;
+      if (!n) { resolve({ flushed: 0 }); return; }
+      log('同步前 flush 补抓月销', n, '件（一次性下发，由 inject 节流）');
+      try { window.postMessage({ __SR_BATCH_FETCH__: true, items: chunk }, '*'); } catch (e) {}
+      // 预计耗时 ≈ n*0.4s + 网络；超时则强制结束，不阻塞同步。
+      var est = Math.min(n * 500 + 4000, 60000);
+      setTimeout(function () { resolve({ flushed: n }); }, Math.min(est, timeoutMs || 60000));
+    });
+  }
+
   // ---- 浮窗 ----
   function ensureFloat() {
     if (floatEl) return;
@@ -1817,7 +1838,6 @@
       '  <div class="sr-row">浏览已扫：<b id="sr-browse-n">0</b> 件（含月销 <b id="sr-browse-m">0</b>）</div>',
       '  <div class="sr-row" id="sr-skip-row" style="display:none;color:#ff8a80;">⚠ 跳过（无价格）：<b id="sr-skip">0</b> 件</div>',
       '  <div class="sr-row">API捕获：<b id="sr-api">0</b> 件</div>',
-      '  <button class="sr-test" id="sr-record-page" style="background:#fff;color:#1c6fd0;border:1px solid #b8d4f0;font-weight:600">录完这一页（整店）</button>',
       '  <button class="sr-sync" id="sr-sync">⚡ 立即同步</button>',
       '  <button class="sr-clear" id="sr-clear">🗑 清空待同步</button>',
       '  <button class="sr-test" id="sr-test">🔍 测试抓取</button>',
@@ -1840,20 +1860,23 @@
     el.querySelector('#sr-sync').addEventListener('click', async function () {
       var msgEl = el.querySelector('#sr-msg');
       msgEl.textContent = '同步中...';
-      // ★ 2026-09-22 Bug A：店铺/详情页点多同步前，先确保整页商品都加载并录制，
-      //   否则只会录到首屏已加载的若干件（用户报「录到 6 件，其实有 12 件月销>30」）。
-      //   仅滚动、不额外发请求（符合项目红线）；若本页已是全部加载，recordWholePage 会很快结束。
+      // ★ 进店整店录：点「立即同步」时，若在本店/详情页，先自动滚到底把全部商品加载并录制
+      //   （仅滚动、不额外发请求，符合项目红线；已全加载则很快结束），确保不漏录懒加载批次。
       var tag = pageTag();
       if (tag === '店铺' || tag === '商品详情') {
-        msgEl.textContent = '正在载入本页全部商品（自动滚动）…';
+        msgEl.textContent = '正在载入本店全部商品（自动滚动）…';
         try { await recordWholePage(); } catch (e) {}
       }
+      msgEl.textContent = '正在补全月销/价格（拉取 item/get）…';
+      // ★ 关键修复：先把「月销缺失」的商品批量补抓队列 flush 给 inject.js 拉 item/get，
+      //   **等补抓完成**（温和节流、约 0.4s/件）再推，否则会推 0 月销 → 网站门槛全隐藏。
+      try { await flushBatchFetchAsync(15, 60000); } catch (e) {}
+      // 等最后几件 item/get 响应回流、写入后台 pending（异步），留足缓冲
+      await new Promise(function (r) { setTimeout(r, 4000); });
       msgEl.textContent = '同步中...';
-      // ★ 先让 inject.js 主动 refetch 一次（此时距页面加载已过一段时间，虾皮限流可能已解除），
-      //   再触发后台同步，确保同步到网站的是最新月/周/总销。
+      // ★ 让 inject.js 再主动 refetch 一次（此时距页面加载已过一段时间，虾皮限流可能已解除），
+      //   确保同步到网站的是最新月/周/总销。
       try { window.postMessage({ __SR_REQUEST_CAPTURE__: true }, '*'); } catch (e) {}
-      // ★ 手动 flush 批量补抓队列（限制数量，避免自动补抓触发风控）
-      flushBatchFetch(10);
       setTimeout(function () {
         chrome.runtime.sendMessage({ type: 'manualSync' }, function (resp) {
           if (chrome.runtime.lastError) { msgEl.textContent = '同步失败: ' + chrome.runtime.lastError.message; return; }
@@ -1874,24 +1897,6 @@
           setTimeout(function () { msgEl.textContent = ''; }, 6000);
         });
       }, 800);
-    });
-    // ★ 2026-09-22 Bug A：浮窗也加「录完这一页」入口（popup 早有，但用户多在店铺页直接操作浮窗，
-    //   看不到 popup）。点击即把本店/本页商品全部滚载并录制，避免漏录后续懒加载批次。
-    el.querySelector('#sr-record-page').addEventListener('click', function () {
-      var msgEl = el.querySelector('#sr-msg');
-      recordWholePage().then(function (r) {
-        if (r && r.ok) {
-          msgEl.textContent = '本页录入 ' + (r.added || 0) + ' 件（月销≥30 的 ' + (r.month30 || 0) + ' 件）';
-          msgEl.style.color = '#27ae60';
-        } else {
-          msgEl.textContent = (r && r.error) ? ('提示: ' + r.error) : '录制未开始';
-          msgEl.style.color = '#e67e22';
-        }
-        setTimeout(function () { msgEl.textContent = ''; msgEl.style.color = ''; }, 6000);
-      }).catch(function (e) {
-        msgEl.textContent = '录制失败: ' + ((e && e.message) || e);
-        setTimeout(function () { msgEl.textContent = ''; }, 5000);
-      });
     });
     el.querySelector('#sr-test').addEventListener('click', function () {
       var n = testScrape();
@@ -2225,16 +2230,16 @@
           pageRecTally = null;
           try { updateFloat(); } catch (e) {}
           var added = tally ? tally.n : 0, m30 = tally ? tally.m30 : 0;
-          log('录完这一页完成：新增=' + added + ' 月销≥30=' + m30 + ' 步数=' + steps);
+          log('本店商品载入完成：新增=' + added + ' 月销≥30=' + m30 + ' 步数=' + steps);
           // 在页面上也给一个明确的结果回执：用户不用回头去看弹窗，
           // 也不会因为「等了半天什么都没看到」而怀疑功能坏了。
           try {
             var el = floatEl && floatEl.querySelector('#sr-msg');
             if (el) {
-              el.textContent = '✅ 录完这一页：新增 ' + added + ' 件（月销≥30 的 ' + m30 + ' 件）· 用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒';
+              el.textContent = '✅ 本店商品已载入：新增 ' + added + ' 件（月销≥30 的 ' + m30 + ' 件）· 用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒';
               el.style.color = '#27ae60';
               setTimeout(function () {
-                if (el.textContent && el.textContent.indexOf('录完这一页') >= 0) { el.textContent = ''; el.style.color = ''; }
+                if (el.textContent && el.textContent.indexOf('本店商品已载入') >= 0) { el.textContent = ''; el.style.color = ''; }
               }, 8000);
             }
           } catch (e) {}
@@ -2270,7 +2275,7 @@
           var el = floatEl && floatEl.querySelector('#sr-msg');
           if (!el || !pageRecTally) return;
           var sec = Math.round((Date.now() - t0) / 1000);
-          el.textContent = '录完这一页：第 ' + steps + ' 步 · 本轮新增 ' + pageRecTally.n + ' 件 · 已用 ' + sec + ' 秒';
+          el.textContent = '本店载入中：第 ' + steps + ' 步 · 本轮新增 ' + pageRecTally.n + ' 件 · 已用 ' + sec + ' 秒';
           el.style.color = '#e67e22';
         } catch (e) {}
       }
@@ -2298,9 +2303,9 @@
       return;
     }
     if (msg.type === 'recordPage') {
-      recordWholePage().then(function (r) { sendResponse(r); })
-        .catch(function (e) { sendResponse({ ok: false, error: (e && e.message) || '未知异常' }); });
-      return true; // 异步回执，保持消息通道
+      // 已移除「录完这一页」手动功能（用户明确不需要）：保留分支仅做安全兜底，不再触发任何录制。
+      sendResponse({ ok: false, error: '该指令已停用' });
+      return;
     }
   });
 
