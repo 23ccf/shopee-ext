@@ -1817,6 +1817,7 @@
       '  <div class="sr-row">浏览已扫：<b id="sr-browse-n">0</b> 件（含月销 <b id="sr-browse-m">0</b>）</div>',
       '  <div class="sr-row" id="sr-skip-row" style="display:none;color:#ff8a80;">⚠ 跳过（无价格）：<b id="sr-skip">0</b> 件</div>',
       '  <div class="sr-row">API捕获：<b id="sr-api">0</b> 件</div>',
+      '  <button class="sr-test" id="sr-record-page" style="background:#fff;color:#1c6fd0;border:1px solid #b8d4f0;font-weight:600">录完这一页（整店）</button>',
       '  <button class="sr-sync" id="sr-sync">⚡ 立即同步</button>',
       '  <button class="sr-clear" id="sr-clear">🗑 清空待同步</button>',
       '  <button class="sr-test" id="sr-test">🔍 测试抓取</button>',
@@ -1836,8 +1837,17 @@
         log('浏览即录:', browseCapture ? '开' : '关');
       });
     }
-    el.querySelector('#sr-sync').addEventListener('click', function () {
+    el.querySelector('#sr-sync').addEventListener('click', async function () {
       var msgEl = el.querySelector('#sr-msg');
+      msgEl.textContent = '同步中...';
+      // ★ 2026-09-22 Bug A：店铺/详情页点多同步前，先确保整页商品都加载并录制，
+      //   否则只会录到首屏已加载的若干件（用户报「录到 6 件，其实有 12 件月销>30」）。
+      //   仅滚动、不额外发请求（符合项目红线）；若本页已是全部加载，recordWholePage 会很快结束。
+      var tag = pageTag();
+      if (tag === '店铺' || tag === '商品详情') {
+        msgEl.textContent = '正在载入本页全部商品（自动滚动）…';
+        try { await recordWholePage(); } catch (e) {}
+      }
       msgEl.textContent = '同步中...';
       // ★ 先让 inject.js 主动 refetch 一次（此时距页面加载已过一段时间，虾皮限流可能已解除），
       //   再触发后台同步，确保同步到网站的是最新月/周/总销。
@@ -1856,6 +1866,24 @@
           setTimeout(function () { msgEl.textContent = ''; }, 4000);
         });
       }, 800);
+    });
+    // ★ 2026-09-22 Bug A：浮窗也加「录完这一页」入口（popup 早有，但用户多在店铺页直接操作浮窗，
+    //   看不到 popup）。点击即把本店/本页商品全部滚载并录制，避免漏录后续懒加载批次。
+    el.querySelector('#sr-record-page').addEventListener('click', function () {
+      var msgEl = el.querySelector('#sr-msg');
+      recordWholePage().then(function (r) {
+        if (r && r.ok) {
+          msgEl.textContent = '本页录入 ' + (r.added || 0) + ' 件（月销≥30 的 ' + (r.month30 || 0) + ' 件）';
+          msgEl.style.color = '#27ae60';
+        } else {
+          msgEl.textContent = (r && r.error) ? ('提示: ' + r.error) : '录制未开始';
+          msgEl.style.color = '#e67e22';
+        }
+        setTimeout(function () { msgEl.textContent = ''; msgEl.style.color = ''; }, 6000);
+      }).catch(function (e) {
+        msgEl.textContent = '录制失败: ' + ((e && e.message) || e);
+        setTimeout(function () { msgEl.textContent = ''; }, 5000);
+      });
     });
     el.querySelector('#sr-test').addEventListener('click', function () {
       var n = testScrape();
