@@ -670,15 +670,39 @@ async function giteePutFile(owner, repo, branch, path, content, token, message) 
   await giteeApi('PUT', `/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, token, body, true);
 }
 
+// ★ 2026-09-22 Gitee 自愈：推送前先向 Gitee 确认身份与仓库。
+//   根因（实测）：扩展配置里的 owner 填的是「23ccf」，但 gitee.com 上不存在该用户
+//   （GET /users/23ccf → 404，全站搜索 shopee-sync 为空），pushToGitee 一直静默失败。
+//   现在：① 用 token 查真实登录名并自动纠正 owner（持久化回 storage）；
+//         ② 仓库不存在自动创建（公开库，auto_init 保证 master 分支存在）；
+//   需 gitee 私人令牌带 projects 权限（扩展设置页提示里已写明）。
+async function giteeEnsureRepo(cfg) {
+  const me = await giteeApi('GET', '/user', cfg.token, null, false);
+  const login = me && (me.login || me.path);
+  if (!login) throw new Error('Gitee token 无效（GET /user 未返回登录名，请检查 token）');
+  const fixed = { owner: login, ownerChanged: String(cfg.owner || '') !== String(login), created: false };
+  try {
+    await giteeApi('GET', `/repos/${login}/${cfg.repo}`, cfg.token, null, false);
+  } catch (e) {
+    // 仓库不存在（404）→ 自动创建公开仓库
+    await giteeApi('POST', '/user/repos', cfg.token, {
+      name: cfg.repo,
+      private: false,
+      auto_init: true,
+      description: 'shopee recorder catalog mirror (auto-created)',
+    }, true);
+    fixed.created = true;
+  }
+  return fixed;
+}
+
 // 把合并后的 catalog 文档同时推送一份到 Gitee（作为国内可访问的实时镜像源）
+// ★ 2026-09-22：返回状态对象 {ok, owner?, created?, error?}，由调用方带进同步回执（失败可见）。
 async function pushToGitee(doc, giteeCfg) {
   if (!giteeCfg || !giteeCfg.enabled || !giteeCfg.token || !giteeCfg.owner || !giteeCfg.repo) {
     console.log('[SR-bg] Gitee 未配置或未启用，跳过镜像推送');
-    return;
+    return { ok: false, skipped: true, error: 'Gitee 未配置或未启用' };
   }
-  const branch = giteeCfg.branch || 'master';
-  const catalogPath = giteeCfg.catalogPath || 'catalog.json';
-  const syncPath = giteeCfg.syncPath || 'sync.json';
   const syncDoc = {
     sync_ts: doc.catalog_ts,
     catalog_ts: doc.catalog_ts,
@@ -688,13 +712,30 @@ async function pushToGitee(doc, giteeCfg) {
     updated_at: new Date().toISOString(),
   };
   try {
-    await giteePutFile(giteeCfg.owner, giteeCfg.repo, branch, catalogPath, JSON.stringify(doc), giteeCfg.token, `sync: catalog (${doc.items.length} items)`);
-    await giteePutFile(giteeCfg.owner, giteeCfg.repo, branch, syncPath, JSON.stringify(syncDoc, null, 2), giteeCfg.token, 'sync heartbeat');
-    console.log('[SR-bg] Gitee 镜像推送成功');
-    await chrome.storage.local.set({ lastGiteeSync: { ts: Date.now(), ok: true, added: doc.items.length } });
+    const heal = await giteeEnsureRepo(giteeCfg);
+    const owner = heal.owner;
+    if (heal.ownerChanged) {
+      giteeCfg.owner = owner;
+      try {
+        const st = await chrome.storage.local.get(['giteeCfg']);
+        const saved = st.giteeCfg || {};
+        saved.owner = owner;
+        await chrome.storage.local.set({ giteeCfg: saved });
+      } catch (e) {}
+      console.log('[SR-bg] Gitee owner 已自动纠正为', owner);
+    }
+    const branch = giteeCfg.branch || 'master';
+    const catalogPath = giteeCfg.catalogPath || 'catalog.json';
+    const syncPath = giteeCfg.syncPath || 'sync.json';
+    await giteePutFile(owner, giteeCfg.repo, branch, catalogPath, JSON.stringify(doc), giteeCfg.token, `sync: catalog (${doc.items.length} items)`);
+    await giteePutFile(owner, giteeCfg.repo, branch, syncPath, JSON.stringify(syncDoc, null, 2), giteeCfg.token, 'sync heartbeat');
+    console.log('[SR-bg] Gitee 镜像推送成功 owner=' + owner + (heal.created ? '（新自动建库）' : ''));
+    await chrome.storage.local.set({ lastGiteeSync: { ts: Date.now(), ok: true, owner: owner, total: doc.items.length } });
+    return { ok: true, owner: owner, created: heal.created };
   } catch (e) {
     console.error('[SR-bg] Gitee 镜像推送失败:', e.message);
     await chrome.storage.local.set({ lastGiteeSync: { ts: Date.now(), ok: false, error: String(e.message) } });
+    return { ok: false, error: String(e.message) };
   }
 }
 
@@ -866,11 +907,12 @@ async function doSync() {
       console.log('[SR-bg] catalog/sync 推送成功');
 
       // === Gitee 镜像双推（国内可达，做到真正实时、不受 GitHub 封锁影响）===
-      // 异步执行：不阻塞「同步完成」的返回，用户可早 1-3 秒看到成功提示；
-      // 失败不阻断 GitHub 已成功的同步；状态记入 lastGiteeSync 供 popup 展示。
-      pushToGitee(newDoc, s.giteeCfg).catch((ge) => {
-        console.error('[SR-bg] Gitee 镜像推送异常(不阻断 GitHub):', ge.message);
-      });
+      // ★ 2026-09-22 自愈+可见：pushToGitee 现在会先自愈（owner 纠正/自动建库）并返回状态。
+      //   限时 6s：超时则推送仍在后台继续（结果稍后写入 lastGiteeSync），回执标 timeout。
+      const giteeRes = await Promise.race([
+        pushToGitee(newDoc, s.giteeCfg),
+        new Promise((r) => setTimeout(() => r({ ok: false, timeout: true, error: 'Gitee 推送超时(>6s)，后台继续' }), 6000)),
+      ]).catch((ge) => ({ ok: false, error: String((ge && ge.message) || ge) }));
 
       const tPush = Date.now();
       console.log('[SR-bg] 同步耗时: 拉取', tFetch - t0, 'ms, 合并', tPush - tFetch, 'ms, 推送', Date.now() - tPush, 'ms');
@@ -896,7 +938,7 @@ async function doSync() {
       updateBadge();
       broadcastPending();
       console.log('[SR-bg] 同步完成: +', added, '件, 共', newItems.length, '件, 跳过月销0:', skippedZeroMonth, ', 总耗时', Date.now() - t0, 'ms');
-      return { ok: true, added, total: newItems.length, skipped: skippedZeroMonth, elapsedMs: Date.now() - t0 };
+      return { ok: true, added, total: newItems.length, skipped: skippedZeroMonth, gitee: giteeRes, elapsedMs: Date.now() - t0 };
     } catch (e) {
       lastErr = e;
       console.error('[SR-bg] 同步失败 (attempt', attempt + 1, '):', e.message);

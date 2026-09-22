@@ -79,7 +79,15 @@ syncBtn.addEventListener('click', async () => {
   syncBtn.disabled = false;
   if (r && r.ok) {
     const skip = r.skipped ? `，已过滤周销0 ${r.skipped} 件` : '';
-    setMsg(`✓ 已同步：新增 ${r.added || 0} 件，共 ${r.total || 0} 件${skip}`, 'ok');
+    // ★ 2026-09-22 Gitee 状态可见：镜像失败不再静默
+    const g = r.gitee || null;
+    let gNote = '';
+    if (g && !g.skipped) {
+      if (g.ok) gNote = `，Gitee✅${g.created ? '(自动建库)' : ''}${g.ownerChanged ? '(owner已纠正)' : ''}`;
+      else if (g.timeout) gNote = '，Gitee⏳后台推送中';
+      else gNote = `，Gitee❌ ${String(g.error || '失败').slice(0, 80)}`;
+    }
+    setMsg(`✓ 已同步：新增 ${r.added || 0} 件，共 ${r.total || 0} 件${skip}${gNote}`, 'ok');
   } else {
     setMsg('✗ ' + (r && r.error ? r.error : '同步失败'), 'err');
   }

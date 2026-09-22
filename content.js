@@ -1859,11 +1859,19 @@
           if (chrome.runtime.lastError) { msgEl.textContent = '同步失败: ' + chrome.runtime.lastError.message; return; }
           if (resp && resp.ok) {
             var skip = resp.skipped ? ('，过滤月销0 ' + resp.skipped + ' 件') : '';
-            msgEl.textContent = '已同步 +' + (resp.added || 0) + ' 件' + skip;
+            // ★ 2026-09-22 Gitee 状态可见：镜像失败不再静默（含自愈结果/超时说明）
+            var g = resp.gitee || null;
+            var gNote = '';
+            if (g && !g.skipped) {
+              if (g.ok) gNote = ' ｜Gitee✅' + (g.created ? '(已自动建库)' : '') + (g.ownerChanged ? '(owner已纠正)' : '');
+              else if (g.timeout) gNote = ' ｜Gitee⏳后台推送中';
+              else gNote = ' ｜Gitee❌' + String(g.error || '失败').slice(0, 60);
+            }
+            msgEl.textContent = '已同步 +' + (resp.added || 0) + ' 件' + skip + gNote;
           } else {
             msgEl.textContent = '同步失败' + (resp && resp.error ? ': ' + resp.error : '');
           }
-          setTimeout(function () { msgEl.textContent = ''; }, 4000);
+          setTimeout(function () { msgEl.textContent = ''; }, 6000);
         });
       }, 800);
     });

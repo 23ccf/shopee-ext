@@ -83,11 +83,17 @@
     if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
     if (location.hostname.indexOf('github.io') < 0) return; // 仅对选品网站生效
     const LS_KEY = 'shopee_gh_token_v1';
-    chrome.storage.local.get(['cfg'], function (res) {
-      const tok = res && res.cfg && res.cfg.token;
-      if (!tok) return;
+    chrome.storage.local.get(['cfg', 'giteeCfg'], function (res) {
       try {
-        if (localStorage.getItem(LS_KEY) !== tok) localStorage.setItem(LS_KEY, tok);
+        const tok = res && res.cfg && res.cfg.token;
+        if (tok && localStorage.getItem(LS_KEY) !== tok) localStorage.setItem(LS_KEY, tok);
+        // ★ 2026-09-22：把 Gitee 镜像地址也同步给网站。owner 已由后台自愈纠正为真实登录名，
+        //   网站 giteeRawUrl 优先读本键（source.json 里配的 owner 可能是错的，如 gitee 上不存在的 23ccf）。
+        const g = res && res.giteeCfg;
+        if (g && g.enabled && g.token && g.owner && g.repo) {
+          const base = 'https://gitee.com/' + g.owner + '/' + g.repo + '/raw/' + (g.branch || 'master');
+          if (localStorage.getItem('shopee_gitee_base_v1') !== base) localStorage.setItem('shopee_gitee_base_v1', base);
+        }
       } catch (e) {}
     });
   } catch (e) {}
