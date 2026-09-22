@@ -71,3 +71,25 @@
     if (++tries > 30) clearInterval(t);
   }, 100);
 })();
+
+// ★ 2026-09-22 修复「录制后网站同步不进去」：
+//   网站「立即同步」走 GitHub Git Data API 实时拉取（无 CDN 缓存），但必须带 token 才能稳定读取
+//   shopee-sync（否则未认证 60 次/小时限流 + 大陆常超时 → 退回陈旧镜像/白屏）。
+//   网站从 localStorage["shopee_gh_token_v1"] 读 token（见 app.js getGhToken）；
+//   扩展后台已经存有录制器 PAT（cfg.token），这里把它自动同步过去，用户无需手动在网站再填一次。
+//   隔离世界与主世界 localStorage 同源共享，故写在此处网站脚本即可读到。
+(function syncRecorderToken() {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+    if (location.hostname.indexOf('github.io') < 0) return; // 仅对选品网站生效
+    const LS_KEY = 'shopee_gh_token_v1';
+    chrome.storage.local.get(['cfg'], function (res) {
+      const tok = res && res.cfg && res.cfg.token;
+      if (!tok) return;
+      try {
+        if (localStorage.getItem(LS_KEY) !== tok) localStorage.setItem(LS_KEY, tok);
+      } catch (e) {}
+    });
+  } catch (e) {}
+})();
+
