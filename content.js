@@ -19,9 +19,9 @@
   var browseCapture = true;  // 开关：true=浏览列表页即自动捕获所有商品的月/周/总销量
   var browseCount = 0;       // 本次已扫到的列表商品件数（含未发送）
   var browseMonthCount = 0;  // 其中含真实月销量的件数
-  var sentMonth = {};        // ★ 2026-09-11：key -> 该商品已发送的月销（供「录完这一页」回报月销≥30 件数）
+  var sentMonth = {};        // ★ 2026-09-11：key -> 该商品已发送的月销（供整店录入回报月销≥30 件数）
   var sentKeyAll = {};       // 本次会话已发送过的全部 key（不受 isUpdate 影响，用于回报总件数）
-  // ★ 2026-09-11：「录完这一页」进行中的计数器。
+  // ★ 2026-09-11：整店录入进行中的计数器。
   //   不能用 sentKeys 差集：店铺页走的是 sendProduct(...,true)（isUpdate），
   //   那条路径根本不写 sentKeys，导致「新增 N 件」在店铺页恒为 0。
   var pageRecTally = null;   // { keys:{key:maxMonth}, n:0, m30:0 }
@@ -1839,6 +1839,7 @@
       '  <div class="sr-row" id="sr-skip-row" style="display:none;color:#ff8a80;">⚠ 跳过（无价格）：<b id="sr-skip">0</b> 件</div>',
       '  <div class="sr-row">API捕获：<b id="sr-api">0</b> 件</div>',
       '  <button class="sr-sync" id="sr-sync">⚡ 立即同步</button>',
+      '  <button class="sr-sync" id="sr-store">📥 录入本店全部商品</button>',
       '  <button class="sr-clear" id="sr-clear">🗑 清空待同步</button>',
       '  <button class="sr-test" id="sr-test">🔍 测试抓取</button>',
       '  <button class="sr-test" id="sr-diag">📋 导出诊断样本</button>',
@@ -1865,7 +1866,7 @@
       var tag = pageTag();
       if (tag === '店铺' || tag === '商品详情') {
         msgEl.textContent = '正在载入本店全部商品（自动滚动）…';
-        try { await recordWholePage(); } catch (e) {}
+        try { await autoLoadStoreItems(); } catch (e) {}
       }
       msgEl.textContent = '正在补全月销/价格（拉取 item/get）…';
       // ★ 关键修复：先把「月销缺失」的商品批量补抓队列 flush 给 inject.js 拉 item/get，
@@ -1897,6 +1898,23 @@
           setTimeout(function () { msgEl.textContent = ''; }, 6000);
         });
       }, 800);
+    });
+    // ★ 恢复进店一键录整店入口（等效 v3.3.4「录完这一页(整店)」，中性名）。
+    el.querySelector('#sr-store').addEventListener('click', function () {
+      var msgEl = el.querySelector('#sr-msg');
+      autoLoadStoreItems().then(function (r) {
+        if (r && r.ok) {
+          msgEl.textContent = '本店录入 ' + (r.added || 0) + ' 件（月销≥30 的 ' + (r.month30 || 0) + ' 件）';
+          msgEl.style.color = '#27ae60';
+        } else {
+          msgEl.textContent = (r && r.error) ? ('提示: ' + r.error) : '录制未开始';
+          msgEl.style.color = '#e67e22';
+        }
+        setTimeout(function () { msgEl.textContent = ''; msgEl.style.color = ''; }, 6000);
+      }).catch(function (e) {
+        msgEl.textContent = '录制失败: ' + ((e && e.message) || e);
+        setTimeout(function () { msgEl.textContent = ''; }, 5000);
+      });
     });
     el.querySelector('#sr-test').addEventListener('click', function () {
       var n = testScrape();
@@ -2199,7 +2217,7 @@
     warn('恢复卖家中心捕获失败:', e.message);
   }
 
-  // ---- ★ 2026-09-11「录完这一页」：自动滚到底，把这一页 / 这家店的商品全部加载出来 ----
+  // ---- ★ 2026-09-11「整店录入」：自动滚到底，把这一页 / 这家店的商品全部加载出来 ----
   // 为什么需要：现在必须手动滚，而列表是分批懒加载的 —— 快滚时中间会漏掉整批商品，
   //   手动滚一页要 1~2 分钟，还容易漏。这里只做「等价于人手动滚动」这一个动作。
   // 三条自我约束（对齐项目红线「绝不让跨境卫士登录出问题」）：
@@ -2207,7 +2225,7 @@
   //   ② 步长固定、间隔 1.2 秒；连续 3 次页面高度不增长即判定到底；
   //   ③ 最多 120 步 / 90 秒；录制开关一关立即停；全程不调 enrich（不拉详情页 HTML，避免 403）。
   var pageRecRunning = false;
-  function recordWholePage() {
+  function autoLoadStoreItems() {
     return new Promise(function (resolve) {
       if (pageRecRunning) { resolve({ ok: false, error: '正在录制中，请稍候' }); return; }
       if (!recordingOn) { resolve({ ok: false, error: '录制开关没开（面板上拨到红色再试）' }); return; }
@@ -2294,7 +2312,7 @@
     });
   }
 
-  // 监听后台推送的 pendingCount，以及面板发来的「录完这一页」指令
+  // 监听后台推送的 pendingCount
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg) return;
     if (msg.type === 'pendingCount') {
@@ -2303,7 +2321,7 @@
       return;
     }
     if (msg.type === 'recordPage') {
-      // 已移除「录完这一页」手动功能（用户明确不需要）：保留分支仅做安全兜底，不再触发任何录制。
+      // 旧「手动整页录入」指令已停用：保留分支仅做安全兜底，不再触发任何录制。
       sendResponse({ ok: false, error: '该指令已停用' });
       return;
     }
