@@ -921,6 +921,26 @@ async function doSync() {
       }, cfg, `sync: +${added} items (total ${newItems.length})`);
       console.log('[SR-bg] catalog/sync 推送成功');
 
+      // ★ 2026-09-23c（v3.3.9）：推送「同源状态指针」到网站仓库（catalog_state.json）。
+      //   背景：api.github.com 在 CN 网络经常不可达，网站无法确认权威源状态，jsDelivr/ghproxy
+      //   各地边缘的陈旧缓存会在竞速里抢赢 →「已清空/最新推送」迟迟不生效。
+      //   指针与网站同域（用户能开网站就一定能拉到），网站用它做新鲜度裁判：
+      //   比指针旧的镜像数据视为陈旧；指针 items=0 且更新 → 网站真正清空。
+      //   尽力而为：失败只告警，不阻断主同步流程。
+      try {
+        const siteCfg = Object.assign({}, cfg, { repo: 'shopee-site' });
+        await pushFilesDataAPI({
+          'catalog_state.json': JSON.stringify({
+            catalog_ts: catalogTs,
+            items: newItems.length,
+            note: 'authoritative source-state pointer, updated by recorder on every push',
+          }),
+        }, siteCfg, 'sync: update catalog_state pointer (items ' + newItems.length + ')');
+        console.log('[SR-bg] catalog_state.json 指针推送成功');
+      } catch (pe) {
+        console.warn('[SR-bg] catalog_state.json 指针推送失败（不阻断主流程）:', pe && pe.message);
+      }
+
       // === Gitee 镜像双推（国内可达，做到真正实时、不受 GitHub 封锁影响）===
       // ★ 2026-09-22 自愈+可见：pushToGitee 现在会先自愈（owner 纠正/自动建库）并返回状态。
       //   限时 6s：超时则推送仍在后台继续（结果稍后写入 lastGiteeSync），回执标 timeout。
