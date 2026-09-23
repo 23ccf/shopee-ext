@@ -846,6 +846,21 @@ async function doSync() {
         if (_ms <= 0 && _ts <= 0 && !_isProduct) { map.delete(_k); _droppedUnknown++; }
       }
       console.log('[SR-bg] 二次过滤(销量未知)后剩余:', map.size, '件，剔除明显非商品:', _droppedUnknown);
+      // ★★ 2026-09-23：支持「重录入可回网站」。
+      //   此前 doSync 把网站删除标记原样保留（mergedDelMap），重录的商品也不会解除标记 → 已删商品永远回不来，
+      //   与用户诉求「录制器重新录入即可复活」相悖。
+      //   现在：本次同步「正在重录」的商品（在 pending 里且成功进入 map），从 mergedDelMap 清除其删除标记
+      //   （下划线 shopid_itemid 与连字符 shopid-itemid 两种 key 都清）→ 推送后 catalog.deleted / deleted.json
+      //   不再含它 → 网站下次同步该商品不再被隐藏，即「重新录入即可复活」。
+      //   仅影响「本次实际录制到的」商品；未重录的已删商品仍保留删除标记（删除依然彻底，不会整批复活）。
+      for (const k of map.keys()) {
+        if (pendingKeys.indexOf(k) < 0) continue;
+        const _p = String(k).split('-');
+        const _s = _p[0];
+        const _i = _p.slice(1).join('-');
+        delete mergedDelMap[_s + '_' + _i];
+        delete mergedDelMap[_s + '-' + _i];
+      }
       // ★★ 2026-09-01 关键修复：尊重网站上的删除。
       //   网站「删除选中」会把被删商品 id 写进 catalog.json 的 deleted 字段 + 独立 deleted.json：
       //   { "<shopid_itemid>": <删除时间戳秒> }
