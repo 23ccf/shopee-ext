@@ -1839,7 +1839,6 @@
       '  <div class="sr-row" id="sr-skip-row" style="display:none;color:#ff8a80;">⚠ 跳过（无价格）：<b id="sr-skip">0</b> 件</div>',
       '  <div class="sr-row">API捕获：<b id="sr-api">0</b> 件</div>',
       '  <button class="sr-sync" id="sr-sync">⚡ 立即同步</button>',
-      '  <button class="sr-sync" id="sr-store">📥 录入本店全部商品</button>',
       '  <button class="sr-clear" id="sr-clear">🗑 清空待同步</button>',
       '  <button class="sr-test" id="sr-test">🔍 测试抓取</button>',
       '  <button class="sr-test" id="sr-diag">📋 导出诊断样本</button>',
@@ -1861,13 +1860,6 @@
     el.querySelector('#sr-sync').addEventListener('click', async function () {
       var msgEl = el.querySelector('#sr-msg');
       msgEl.textContent = '同步中...';
-      // ★ 进店整店录：点「立即同步」时，若在本店/详情页，先自动滚到底把全部商品加载并录制
-      //   （仅滚动、不额外发请求，符合项目红线；已全加载则很快结束），确保不漏录懒加载批次。
-      var tag = pageTag();
-      if (tag === '店铺' || tag === '商品详情') {
-        msgEl.textContent = '正在载入本店全部商品（自动滚动）…';
-        try { await autoLoadStoreItems(); } catch (e) {}
-      }
       msgEl.textContent = '正在补全月销/价格（拉取 item/get）…';
       // ★ 关键修复：先把「月销缺失」的商品批量补抓队列 flush 给 inject.js 拉 item/get，
       //   **等补抓完成**（温和节流、约 0.4s/件）再推，否则会推 0 月销 → 网站门槛全隐藏。
@@ -1899,23 +1891,7 @@
         });
       }, 800);
     });
-    // ★ 恢复进店一键录整店入口（等效 v3.3.4「录完这一页(整店)」，中性名）。
-    el.querySelector('#sr-store').addEventListener('click', function () {
-      var msgEl = el.querySelector('#sr-msg');
-      autoLoadStoreItems().then(function (r) {
-        if (r && r.ok) {
-          msgEl.textContent = '本店录入 ' + (r.added || 0) + ' 件（月销≥30 的 ' + (r.month30 || 0) + ' 件）';
-          msgEl.style.color = '#27ae60';
-        } else {
-          msgEl.textContent = (r && r.error) ? ('提示: ' + r.error) : '录制未开始';
-          msgEl.style.color = '#e67e22';
-        }
-        setTimeout(function () { msgEl.textContent = ''; msgEl.style.color = ''; }, 6000);
-      }).catch(function (e) {
-        msgEl.textContent = '录制失败: ' + ((e && e.message) || e);
-        setTimeout(function () { msgEl.textContent = ''; }, 5000);
-      });
-    });
+    // ★ 进店整店录入改为「进入店铺自动触发」（见 onRoute / maybeAutoLoadStore），不再提供手动按钮。
     el.querySelector('#sr-test').addEventListener('click', function () {
       var n = testScrape();
       var msgEl = el.querySelector('#sr-msg');
@@ -2312,6 +2288,21 @@
     });
   }
 
+  // ★ 进店自动载入整店商品：替代已移除的手动整店录入按钮。
+  //   用户诉求：进入店铺后录制器立刻获取全部信息（懒加载批次靠滚动触发），无需手动点按钮。
+  //   仅在「店铺」页触发；同一 URL 只自动触发一次（避免 SPA 路由抖动重复滚动）。
+  var storeAutoLoadUrl = null;
+  function maybeAutoLoadStore() {
+    if (!recordingOn || !ON_BUYER) return;
+    if (pageRecRunning) return;
+    if (pageTag() !== '店铺') { storeAutoLoadUrl = null; return; }
+    var url = location.href;
+    if (storeAutoLoadUrl === url) return;   // 已为本页自动载入过，不重复滚动
+    storeAutoLoadUrl = url;
+    log('进店自动载入整店商品:', url);
+    try { autoLoadStoreItems(); } catch (e) {}
+  }
+
   // 监听后台推送的 pendingCount
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg) return;
@@ -2366,6 +2357,8 @@
       setTimeout(scrapeCards, 600);
       setTimeout(scrapeCards, 1500);
       setTimeout(scrapeCards, 3000);
+      // ★ 进店自动载入整店商品（替代手动按钮）：用户进店即自动抓取全部信息
+      maybeAutoLoadStore();
     }
     history.pushState = function () { op.apply(this, arguments); onRoute(); };
     history.replaceState = function () { or.apply(this, arguments); onRoute(); };
@@ -2392,6 +2385,9 @@
   [1000, 2000, 4000, 6000, 10000, 15000, 25000, 45000].forEach(function (t) {
     setTimeout(scrapeCards, t);
   });
+
+  // ★ 首次进入若为店铺页，自动载入整店商品（替代手动按钮）
+  setTimeout(maybeAutoLoadStore, 2500);
 
   // ★ 2026-08-20：每 10 秒 ping 一次 background，既保活 service worker，又确保自动同步定时器持续运行
   setInterval(function () {
