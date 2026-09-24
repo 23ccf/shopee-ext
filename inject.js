@@ -134,15 +134,27 @@
     }
   });
 
+  // ★ 2026-09-24 风控修复：旧版固定 0.4 秒/件连发，是「点立即同步→整页被踢到
+  //   verify/traffic/error（会话失效）」的主因。改为：
+  //   ① 每件随机 2.6~4.0s 间隔（与详情页 _upgradeDelay 同口径，稳定随机比固定间隔更不像机器）；
+  //   ② 任一请求返回非 200（403/429 等 WAF 信号）→ 立即中止剩余请求并通知 content.js，
+  //      绝不连续触发风控；被中止后未补到月销的商品照常推送（月销缺失由网站门槛处理）。
   function fetchBatchItems(items) {
     if (!items || !items.length) return;
     var init = buildInit({ Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' });
+    var aborted = false;
     items.forEach(function (it, idx) {
       if (!it.shopid || !it.itemid) return;
       setTimeout(function () {
+        if (aborted) return;
         var url = 'https://shopee.tw/api/v4/item/get?itemid=' + encodeURIComponent(it.itemid) + '&shopid=' + encodeURIComponent(it.shopid);
         fetch(url, init).then(function (resp) {
-          if (!resp.ok) return;
+          if (!resp.ok) {
+            aborted = true;
+            postLog('batch-fetch', 'item/get 返回 ' + resp.status + '，已中止剩余补抓（防风控）');
+            try { window.postMessage({ __SR_BATCH_ABORT__: true, status: resp.status }, '*'); } catch (e) {}
+            return;
+          }
           return resp.json();
         }).then(function (json) {
           if (!json) return;
@@ -151,7 +163,7 @@
             post({ endpoint: '/api/v4/item/get', items: out, authoritativeMonth: true, source: 'batch' });
           }
         }).catch(function () {});
-      }, idx * 400);
+      }, idx * (2600 + Math.round(Math.random() * 1400)));
     });
   }
 

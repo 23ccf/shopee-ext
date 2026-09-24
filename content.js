@@ -1735,8 +1735,8 @@
   // 拿到 shopid+itemid 后，让 inject.js 在 MAIN world 用页面真实 header 批量请求 item/get，
   // 偷听到的真实响应走 handleApiCapture（authMonth=true），月销自动补回。
   // ★ 2026-08-20 修复：自动批量补抓是触发虾皮风控（verify/traffic/error）的主因，
-  //   改为【只收集、不自动发送】，仅在用户点「立即同步」时手动 flush 一次，且最多补 10 件、
-  //   并发 1、间隔 2 秒，最大限度降低额外请求量。
+  //   改为【只收集、不自动发送】，仅在用户点「立即同步」时手动 flush 一次，且最多补 5 件、
+  //   inject 侧每件随机 2.6~4.0s、任一 403/429 立即中止（2026-09-24 强化，见 flushBatchFetchAsync）。
   var batchFetchQueue = [];
   var batchFetchSent = {};
   var batchFetchTimer = null;
@@ -1777,8 +1777,14 @@
     next();
   }
 
-  // ★ 同步前一次性把补抓队列下发（inject.js 内部按约 0.4s/件温和节流），并等全部发完再 resolve，
+  // ★ 同步前一次性把补抓队列下发（inject.js 内部按 2.6~4.0s/件人性化节流），并等发完再 resolve，
   //   让「立即同步」在推送前把月销缺失的商品补全真实月销（否则推 0 月销被网站门槛全隐藏）。
+  // ★ 2026-09-24 风控修复：inject 收到 403/429 等 WAF 信号会发 __SR_BATCH_ABORT__，
+  //   收到即提前结束等待、直接进入推送，绝不继续等剩余请求把会话踢到风控页。
+  var _batchAborted = false;
+  window.addEventListener('message', function (e) {
+    if (e && e.data && e.data.__SR_BATCH_ABORT__) { _batchAborted = true; }
+  });
   function flushBatchFetchAsync(maxItems, timeoutMs) {
     return new Promise(function (resolve) {
       if (!batchFetchQueue.length) { resolve({ flushed: 0 }); return; }
@@ -1787,11 +1793,15 @@
       for (var i = 0; i < limit && batchFetchQueue.length; i++) chunk.push(batchFetchQueue.shift());
       var n = chunk.length;
       if (!n) { resolve({ flushed: 0 }); return; }
-      log('同步前 flush 补抓月销', n, '件（一次性下发，由 inject 节流）');
+      _batchAborted = false;
+      log('同步前 flush 补抓月销', n, '件（一次性下发，由 inject 人性化节流）');
       try { window.postMessage({ __SR_BATCH_FETCH__: true, items: chunk }, '*'); } catch (e) {}
-      // 预计耗时 ≈ n*0.4s + 网络；超时则强制结束，不阻塞同步。
-      var est = Math.min(n * 500 + 4000, 60000);
-      setTimeout(function () { resolve({ flushed: n }); }, Math.min(est, timeoutMs || 60000));
+      // 预计耗时 ≈ n*3.3s；收到中止信号提前结束，或超时强制结束，不阻塞同步。
+      var est = Math.min(n * 3300 + 3000, 25000);
+      var done = false;
+      function finish() { if (!done) { done = true; clearInterval(poll); resolve({ flushed: n, aborted: _batchAborted }); } }
+      var poll = setInterval(function () { if (_batchAborted) finish(); }, 300);
+      setTimeout(finish, Math.min(est, timeoutMs || 25000));
     });
   }
 
@@ -1860,12 +1870,14 @@
     el.querySelector('#sr-sync').addEventListener('click', async function () {
       var msgEl = el.querySelector('#sr-msg');
       msgEl.textContent = '同步中...';
-      msgEl.textContent = '正在补全月销/价格（拉取 item/get）…';
-      // ★ 关键修复：先把「月销缺失」的商品批量补抓队列 flush 给 inject.js 拉 item/get，
-      //   **等补抓完成**（温和节流、约 0.4s/件）再推，否则会推 0 月销 → 网站门槛全隐藏。
-      try { await flushBatchFetchAsync(15, 60000); } catch (e) {}
+      msgEl.textContent = '正在补全月销/价格（限 5 件、慢速补抓）…';
+      // ★ 2026-09-24 风控修复：补抓限额 15→5、inject 侧 2.6~4.0s/件 + 403 即中止；
+      //   月销缺失的商品由网站门槛处理，绝不为补销量把会话踢到风控页。
+      var _flushRes = null;
+      try { _flushRes = await flushBatchFetchAsync(5, 25000); } catch (e) {}
+      if (_flushRes && _flushRes.aborted) msgEl.textContent = '⚠ 补抓被风控中止，直接推送已有数据…';
       // 等最后几件 item/get 响应回流、写入后台 pending（异步），留足缓冲
-      await new Promise(function (r) { setTimeout(r, 4000); });
+      await new Promise(function (r) { setTimeout(r, 2500); });
       msgEl.textContent = '同步中...';
       // ★ 让 inject.js 再主动 refetch 一次（此时距页面加载已过一段时间，虾皮限流可能已解除），
       //   确保同步到网站的是最新月/周/总销。
