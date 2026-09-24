@@ -484,7 +484,9 @@
       }
     }
     // ★ 2026-09-17：ctime = 商品上架时间（unix 秒，全端点语义一致）。缺失 = null（三态）。
-    var ctime = coerceIntLocal(firstDeep(it, ['ctime', 'item_data.ctime']));
+    // ★ 2026-09-24 修复：虾皮 item/get / 店铺接口真实字段名是 create_time（非 ctime），
+    //   旧代码只读 ctime 导致 listed_at 永远抓不到。这里把 create_time 放首位，ctime 仅作旧结构兜底。
+    var ctime = coerceIntLocal(firstDeep(it, ['create_time', 'ctime', 'item_data.create_time', 'item_data.ctime']));
     var name = firstDeep(it, ep.name || []);
     // ★ 2026-09-18：主路径缺失时深搜兜底（findTextDeep，排除 shop/brand 容器）
     if (name == null) name = findTextDeep(it, ['name', 'title']);

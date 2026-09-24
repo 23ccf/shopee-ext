@@ -1483,8 +1483,14 @@
             }
           }
           if (sLoc && typeof sLoc === 'string') sprod.loc = sLoc;
-          // ★ 2026-09-17：上架时间（ctime，unix 秒）→ listed_at。网站据此显示「上架 N 天」。
-          var _ct = Number(it.ctime);
+          // ★ 2026-09-24 修复：上架时间真实字段是 create_time（unix 秒），部分旧结构用 ctime。
+          //   旧代码只读 it.ctime 导致 listed_at 从未采到（与 schema 同根因）。逐项兜底读取。
+          var _ctRaw = (it.create_time != null) ? it.create_time
+                     : (it.item_data && it.item_data.create_time != null) ? it.item_data.create_time
+                     : (it.ctime != null) ? it.ctime
+                     : (it.item_data && it.item_data.ctime != null) ? it.item_data.ctime
+                     : null;
+          var _ct = Number(_ctRaw);
           if (isFinite(_ct) && _ct > 0) sprod.listed_at = _ct;
           sendProduct(sprod, source === 'pdp_card' ? 'PDP推荐' : '店铺', true);
           continue;
